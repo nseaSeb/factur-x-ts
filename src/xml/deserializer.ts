@@ -362,7 +362,9 @@ function parseLineItem(node: ParsedLineItem): LineItem {
   const allowances = settlementAllowancesCharges.filter((ac) => !isChargeIndicator(ac)).map(parseAllowanceCharge);
   const charges = settlementAllowancesCharges.filter((ac) => isChargeIndicator(ac)).map(parseAllowanceCharge);
 
-  const description = node.SpecifiedTradeProduct?.Description;
+  // Non-optional access: the `!name` guard above narrows SpecifiedTradeProduct
+  // to defined. Moving that guard makes this a compile error, not a crash.
+  const description = node.SpecifiedTradeProduct.Description;
 
   return {
     id,
@@ -503,7 +505,7 @@ function parsePrecedingInvoice(node: ParsedReferencedDocument): PrecedingInvoice
 
 // ---- Primitives ----
 
-function textOf<T extends TextNode>(node: string | T | undefined): string | undefined {
+function textOf(node: string | TextNode | undefined): string | undefined {
   if (node === undefined) return undefined;
   if (typeof node === 'string') return node;
   return node['#text'];

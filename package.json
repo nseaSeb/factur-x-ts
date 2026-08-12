@@ -11,22 +11,28 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "schemas"],
+  "files": [
+    "dist",
+    "schemas"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src tests eslint.config.js"
   },
   "dependencies": {
-    "pdf-lib": "^1.17.1",
-    "fast-xml-parser": "^4.5.0"
+    "fast-xml-parser": "^4.5.0",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.8.1",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0",
-    "@types/node": "^22.0.0"
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^2.1.0"
   },
   "engines": {
     "node": ">=20.11.0"

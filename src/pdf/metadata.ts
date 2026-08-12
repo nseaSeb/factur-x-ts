@@ -16,6 +16,9 @@ export function buildXmpMetadata(options: XmpMetadataOptions): string {
   const documentIdUri = `uuid:${toUuid(documentIdHex)}`;
 
   return (
+    // The xpacket header must carry U+FEFF as its begin marker (XMP spec,
+    // ISO 16684-1 §7.3.2) — that "irregular whitespace" is load-bearing.
+    // eslint-disable-next-line no-irregular-whitespace
     `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>` +
     `<x:xmpmeta xmlns:x="adobe:ns:meta/">` +
     `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +

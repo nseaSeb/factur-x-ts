@@ -60,8 +60,12 @@ export function validateEn16931(invoice: FacturXInvoice): ValidationResult {
     errors.push(field('taxBreakdown', 'NO_TAX_BREAKDOWN', 'An invoice must have at least one VAT breakdown group (BG-23)'));
   }
 
-  invoice.lines.forEach((line, index) => validateLine(line, index, errors));
-  invoice.taxBreakdown.forEach((tb, index) => validateTaxBreakdown(tb, index, errors));
+  invoice.lines.forEach((line, index) => {
+    validateLine(line, index, errors);
+  });
+  invoice.taxBreakdown.forEach((tb, index) => {
+    validateTaxBreakdown(tb, index, errors);
+  });
   validateTaxBreakdownCoversLines(invoice, errors);
   validateAmounts(invoice, errors);
 
