@@ -93,6 +93,15 @@ describe('validateEn16931', () => {
       expect(validateEn16931(invalid).errors.some((e) => e.field === 'taxBreakdown[0].dueDateTypeCode')).toBe(true);
     });
 
+    it('rejects Object.prototype member names, which `in` would have admitted', () => {
+      // Reachable from parsed third-party XML: qdt:TimeReferenceCodeType is an
+      // unenumerated xs:token, so such a value passes the XSD.
+      for (const code of ['toString', 'valueOf', 'hasOwnProperty']) {
+        const result = validateEn16931({ ...sampleInvoice(), taxDueDateTypeCode: code });
+        expect(result.errors.some((e) => e.code === 'INVALID_VAT_POINT_DATE'), code).toBe(true);
+      }
+    });
+
     it('can be switched off for the correct-a-received-invoice pipeline', () => {
       const invoice = { ...sampleInvoice(), taxDueDateTypeCode: '3' };
       expect(validateEn16931(invoice, { validateVatPointDate: false }).valid).toBe(true);
@@ -116,6 +125,32 @@ describe('validateEn16931', () => {
       const invoice = { ...sampleInvoice(), businessProcess: 'X9' };
       const result = validateEn16931(invoice, { validateBusinessProcess: true });
       expect(result.errors.some((e) => e.code === 'INVALID_BUSINESS_PROCESS')).toBe(true);
+    });
+
+    it('keeps the G1.02 list closed against Object.prototype member names', () => {
+      for (const code of ['constructor', 'valueOf', 'hasOwnProperty']) {
+        const result = validateEn16931({ ...sampleInvoice(), businessProcess: code }, { validateBusinessProcess: true });
+        expect(result.errors.some((e) => e.code === 'INVALID_BUSINESS_PROCESS'), code).toBe(true);
+      }
+    });
+
+    it('rejects a BT-8 present on only some breakdown groups (S1.13)', () => {
+      // The likeliest real violation: one BG-23 carries ram:DueDateTypeCode and
+      // the other does not, which S1.13 forbids as much as two different codes.
+      const invoice = sampleInvoice();
+      const partial = {
+        ...invoice,
+        taxDueDateTypeCode: undefined,
+        taxBreakdown: [
+          { ...invoice.taxBreakdown[0]!, dueDateTypeCode: '29' },
+          { ...invoice.taxBreakdown[0]!, rate: 10 },
+        ],
+      };
+      const result = validateEn16931(partial, { validateBusinessProcess: true });
+      const inconsistent = result.errors.find((e) => e.code === 'INCONSISTENT_VAT_POINT_DATE');
+
+      expect(inconsistent).toBeDefined();
+      expect(inconsistent?.message).toContain('(absent)');
     });
 
     it('requires BT-23 when enabled', () => {

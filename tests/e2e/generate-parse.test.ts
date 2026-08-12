@@ -140,6 +140,23 @@ describe('regenerating over an existing Factur-X PDF', () => {
   });
 });
 
+describe('code-list validation across profiles', () => {
+  it('rejects an invalid BT-8 even on a reduced profile', async () => {
+    // BT-8 is serialized whatever the profile, so the code-list check must run
+    // whatever the profile — BASIC WL is an accepted French mandate profile.
+    const invoice = { ...sampleInvoice(), taxDueDateTypeCode: '3' };
+
+    await expect(generate({ invoice, profile: 'BASIC WL' })).rejects.toThrow(/INVALID|rules/);
+  });
+
+  it('does not apply EN 16931 mandatory-field rules to a reduced profile', async () => {
+    // A missing VAT breakdown is an EN 16931 error, not a BASIC WL one.
+    const invoice = { ...sampleInvoice(), taxDueDateTypeCode: undefined, taxBreakdown: [] };
+
+    await expect(generate({ invoice, profile: 'MINIMUM' })).resolves.toBeInstanceOf(Uint8Array);
+  });
+});
+
 describe('attachment filename encodings', () => {
   it('finds the attachment when /F is a hex string and /UF is absent', async () => {
     const pdfBytes = await generate({ invoice: sampleInvoice(), profile: 'EN 16931' });

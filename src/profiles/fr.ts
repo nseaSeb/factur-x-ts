@@ -53,7 +53,9 @@ export function validateFrenchBusinessProcess(invoice: FacturXInvoice, errors: V
     return;
   }
 
-  if (!(code in BUSINESS_PROCESS_CODES)) {
+  // Object.hasOwn, not `in`: `in` walks Object.prototype, so a closed list
+  // checked with `in` would admit "constructor", "valueOf", "hasOwnProperty".
+  if (!Object.hasOwn(BUSINESS_PROCESS_CODES, code)) {
     errors.push(
       error(
         'businessProcess',
@@ -85,16 +87,19 @@ export function validateFrenchBusinessProcess(invoice: FacturXInvoice, errors: V
  * restriction only.
  */
 export function validateUniformVatPointDate(invoice: FacturXInvoice, errors: ValidationError[]): void {
-  const codes = new Set(
-    invoice.taxBreakdown.map((tb) => tb.dueDateTypeCode ?? invoice.taxDueDateTypeCode).filter((c) => c !== undefined),
-  );
+  // Entries carrying *no* code must count. Filtering them out would hide the
+  // likeliest real violation: one BG-23 with a code and one without serializes
+  // ram:DueDateTypeCode on only some of the groups, which S1.13 forbids just as
+  // much as two different codes do.
+  const codes = new Set(invoice.taxBreakdown.map((tb) => tb.dueDateTypeCode ?? invoice.taxDueDateTypeCode));
 
   if (codes.size > 1) {
+    const rendered = [...codes].map((c) => c ?? '(absent)').sort().join(', ');
     errors.push(
       error(
         'taxBreakdown',
         'INCONSISTENT_VAT_POINT_DATE',
-        `Codes d'exigibilité TVA (BT-8) divergents dans un même document : ${[...codes].sort().join(', ')} (S1.13)`,
+        `Codes d'exigibilité TVA (BT-8) divergents dans un même document : ${rendered} — chaque BG-23 doit porter la même valeur (S1.13)`,
       ),
     );
   }

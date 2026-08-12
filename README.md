@@ -147,15 +147,28 @@ Two validation switches, with deliberately different defaults:
 
 Both stay switchable: "invalid" does not mean "must never be serializable", and the *extract → parse → correct → generate* pipeline over a received invoice is a central use case.
 
+These two checks run on **every** profile, not just `EN 16931`: BT-8 and BT-23 are serialized whatever the profile, and the French mandate accepts reduced profiles. The full EN 16931 mandatory-field set stays limited to `profile: 'EN 16931'`, since the reduced profiles legitimately omit fields it requires.
+
 Exported code tables: `BUSINESS_PROCESS_CODES` (the 13 G1.02 codes) and `VAT_POINT_DATE_CODES`.
 
 > The codes `3` / `35` / `432` are frequently quoted for BT-8 but belong to UNTDID **2005**, which is the **UBL** subset. In CII they pass the XSD — `qdt:TimeReferenceCodeType` is an unenumerated `xs:token` — and are then rejected by the Schematron, hence by the platform. `validateVatPointDate` catches them immediately.
 
-### BT-8 round-trips exactly
+### BT-8 is normalised, not preserved verbatim
 
-BT-8 lives inside each `ram:ApplicableTradeTax`, but French rule S1.13 requires one value per document, so `taxDueDateTypeCode` is a document-level field copied onto every entry when serializing.
+BT-8 lives inside each `ram:ApplicableTradeTax`, but French rule S1.13 requires one value per document, so `taxDueDateTypeCode` is a document-level field copied onto every entry when serializing. On parsing, a **uniform** code is lifted back to the document level; **divergent** codes are kept per entry with no document-level field.
 
-On parsing, a **uniform** code is lifted back to the document level; **divergent** codes are kept per entry and no document-level field is produced. EN 16931 permits differing codes per entry, so collapsing `29, 72` into `29, 29` would silently falsify the VAT point date of the second entry — this library will not do that. `parse(generate(invoice))` reproduces `invoice` in both cases.
+`parse(generate(invoice))` therefore reproduces `invoice` exactly for the two canonical shapes — a document-level code with no per-entry override, or no BT-8 at all — and rewrites the two mixed shapes into their canonical equivalent:
+
+| Input | Comes back as |
+| --- | --- |
+| document-level `'5'`, no override | unchanged |
+| no BT-8 anywhere | unchanged |
+| per-entry `'29'`, no document-level code | document-level `'29'`, entry stripped |
+| document-level `'5'`, one entry overriding to `'29'` | no document-level code, entries `['29', '5']` |
+
+Every rewrite is semantically identical to its input. What the library will **not** do is collapse divergent codes: EN 16931 permits differing codes per entry, so turning `29, 72` into `29, 29` would silently falsify the second entry's VAT point date.
+
+Under `validateBusinessProcess`, rule S1.13 rejects both divergent codes and a BT-8 present on only *some* breakdown groups — the latter being the likelier mistake, since it serializes `ram:DueDateTypeCode` onto some `BG-23` groups and not others.
 
 ## Allowances and charges
 

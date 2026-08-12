@@ -64,14 +64,46 @@ export function sampleInvoice(): FacturXInvoice {
 }
 
 /**
- * A round-trip is now exact: there is no expected drift to model.
+ * Expected shape after a serialize -> deserialize round-trip.
  *
- * The document-level `taxDueDateTypeCode` (BT-8) is copied onto every
- * `ram:ApplicableTradeTax` on serialize and lifted back on deserialize when all
- * entries agree, so `parse(generate(invoice))` reproduces `invoice` verbatim.
- * A document whose entries carry *differing* codes keeps them per-entry instead
- * — see normalizeVatPointDate in src/xml/deserializer.ts.
+ * BT-8 is *normalised*, not preserved verbatim: the serializer writes
+ * `tb.dueDateTypeCode ?? invoice.taxDueDateTypeCode` onto every
+ * `ram:ApplicableTradeTax`, and the deserializer lifts the value back to the
+ * document level only when every entry agrees.
+ *
+ * So a round-trip is exact for the two canonical shapes — a document-level code
+ * with no per-entry override, and no BT-8 at all — but not for the two mixed
+ * ones, which are rewritten into their canonical equivalent:
+ *
+ * - a per-entry code with no document-level code is lifted to document level;
+ * - a document-level code overridden by one entry is pushed down onto all
+ *   entries, and the document-level field disappears.
+ *
+ * Both rewrites are semantically identical to their input. This helper models
+ * them so that a future fixture of either shape does not read as a deserializer
+ * bug. See normalizeVatPointDate in src/xml/deserializer.ts.
  */
 export function expectedRoundTrip(invoice: FacturXInvoice): FacturXInvoice {
-  return invoice;
+  const effective = invoice.taxBreakdown.map((tb) => tb.dueDateTypeCode ?? invoice.taxDueDateTypeCode);
+  const distinct = new Set(effective);
+  const uniform = effective.length > 0 && distinct.size === 1 && !distinct.has(undefined);
+
+  if (uniform) {
+    return {
+      ...invoice,
+      taxDueDateTypeCode: effective[0],
+      taxBreakdown: invoice.taxBreakdown.map(({ dueDateTypeCode: _lifted, ...rest }) => rest),
+    };
+  }
+
+  // Drop the key rather than set it to undefined: the deserializer omits it
+  // entirely, and an explicit undefined would differ under deepStrictEqual.
+  const { taxDueDateTypeCode: _pushedDown, ...withoutDocumentCode } = invoice;
+  return {
+    ...withoutDocumentCode,
+    taxBreakdown: invoice.taxBreakdown.map((tb, index) => ({
+      ...tb,
+      ...(effective[index] !== undefined ? { dueDateTypeCode: effective[index] } : {}),
+    })),
+  };
 }

@@ -34,8 +34,29 @@ const ZERO_RATE_CATEGORIES: readonly VatCategoryCode[] = ['Z', 'E', 'G', 'O', 'K
 // Categories where a VAT exemption reason (text or code) must be given at breakdown level.
 const EXEMPTION_REQUIRED_CATEGORIES: readonly VatCategoryCode[] = ['E', 'O', 'AE'];
 
-export function validateEn16931(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
+/**
+ * The rules that do not depend on the Factur-X profile: BT-8 code validity
+ * (BR-CL-06) and, opt-in, the French BT-23 rules.
+ *
+ * These live in the same CII elements in every profile and `serialize` emits
+ * them regardless, so they are worth checking even for MINIMUM or BASIC WL —
+ * where the full EN 16931 mandatory-field set would raise false errors, those
+ * profiles legitimately omitting fields it requires.
+ */
+export function validateCodeLists(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
   const { validateVatPointDate = true, validateBusinessProcess = false } = options;
+  const errors: ValidationError[] = [];
+
+  if (validateVatPointDate) validateVatPointDateCodes(invoice, errors);
+  if (validateBusinessProcess) {
+    validateFrenchBusinessProcess(invoice, errors);
+    validateUniformVatPointDate(invoice, errors);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateEn16931(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
   const errors: ValidationError[] = [];
 
   if (invoice.number.trim() === '') {
@@ -70,11 +91,7 @@ export function validateEn16931(invoice: FacturXInvoice, options: ValidationOpti
   validateTaxBreakdownCoversLines(invoice, errors);
   validateAmounts(invoice, errors);
 
-  if (validateVatPointDate) validateVatPointDateCodes(invoice, errors);
-  if (validateBusinessProcess) {
-    validateFrenchBusinessProcess(invoice, errors);
-    validateUniformVatPointDate(invoice, errors);
-  }
+  errors.push(...validateCodeLists(invoice, options).errors);
 
   return { valid: errors.length === 0, errors };
 }
@@ -95,12 +112,15 @@ function validateVatPointDateCodes(invoice: FacturXInvoice, errors: ValidationEr
     );
   }
 
-  if (documentCode !== undefined && !(documentCode in VAT_POINT_DATE_CODES)) {
+  // Object.hasOwn, not `in`: `in` resolves through Object.prototype, so a code of
+  // "toString" or "valueOf" would pass a closed-list check. Reachable from parsed
+  // third-party XML, since qdt:TimeReferenceCodeType is an unenumerated xs:token.
+  if (documentCode !== undefined && !Object.hasOwn(VAT_POINT_DATE_CODES, documentCode)) {
     errors.push(invalidVatPointDate('taxDueDateTypeCode', documentCode));
   }
 
   invoice.taxBreakdown.forEach((tb, index) => {
-    if (tb.dueDateTypeCode !== undefined && !(tb.dueDateTypeCode in VAT_POINT_DATE_CODES)) {
+    if (tb.dueDateTypeCode !== undefined && !Object.hasOwn(VAT_POINT_DATE_CODES, tb.dueDateTypeCode)) {
       errors.push(invalidVatPointDate(`taxBreakdown[${index}].dueDateTypeCode`, tb.dueDateTypeCode));
     }
   });

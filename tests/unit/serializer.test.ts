@@ -111,6 +111,36 @@ describe('serialize + deserialize round-trip', () => {
     expect(roundTripped.taxBreakdown.map((tb) => tb.dueDateTypeCode)).toEqual(['29', '72']);
   });
 
+  it.each([
+    ['document-level code only', (i: ReturnType<typeof sampleInvoice>) => i],
+    [
+      'no BT-8 at all',
+      (i: ReturnType<typeof sampleInvoice>) => ({ ...i, taxDueDateTypeCode: undefined }),
+    ],
+    [
+      'per-entry code only, lifted to document level',
+      (i: ReturnType<typeof sampleInvoice>) => ({
+        ...i,
+        taxDueDateTypeCode: undefined,
+        taxBreakdown: [{ ...i.taxBreakdown[0]!, dueDateTypeCode: '29' }],
+      }),
+    ],
+    [
+      'document-level code overridden by one entry, pushed down',
+      (i: ReturnType<typeof sampleInvoice>) => ({
+        ...i,
+        taxDueDateTypeCode: '5',
+        taxBreakdown: [
+          { ...i.taxBreakdown[0]!, dueDateTypeCode: '29' },
+          { ...i.taxBreakdown[0]!, rate: 10, basisAmount: 0, calculatedAmount: 0 },
+        ],
+      }),
+    ],
+  ])('normalises BT-8 predictably: %s', (_label, shape) => {
+    const invoice = shape(sampleInvoice());
+    expect(deserialize(serialize(invoice, 'EN 16931'))).toEqual(expectedRoundTrip(invoice));
+  });
+
   it('handles an invoice with only mandatory fields', () => {
     const minimal = {
       number: 'INV-MIN-1',

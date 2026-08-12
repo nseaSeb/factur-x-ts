@@ -22,7 +22,7 @@ import type { Profile } from '../types/profiles.js';
 import { serialize } from '../xml/serializer.js';
 import { buildXmpMetadata } from './metadata.js';
 import { isFacturXFilespec } from './filespec.js';
-import { validateEn16931, type ValidationError } from '../profiles/en16931.js';
+import { validateCodeLists, validateEn16931, type ValidationError } from '../profiles/en16931.js';
 
 export class FacturXGenerateError extends Error {
   readonly validationErrors: readonly ValidationError[];
@@ -44,14 +44,19 @@ const DATA_RELATIONSHIP_PROFILES: readonly Profile[] = ['MINIMUM', 'BASIC WL'];
 export async function generate(options: GenerateOptions): Promise<Uint8Array> {
   const { invoice, profile, visualPdf, validation: validationOptions } = options;
 
-  if (profile === 'EN 16931') {
-    const validation = validateEn16931(invoice, validationOptions);
-    if (!validation.valid) {
-      throw new FacturXGenerateError(
-        `Invoice does not satisfy EN 16931 mandatory rules (${validation.errors.length} error(s))`,
-        validation.errors,
-      );
-    }
+  // The full mandatory-field set applies to EN 16931 only — the reduced profiles
+  // legitimately omit fields it requires. The code-list rules apply everywhere,
+  // because BT-8/BT-23 are serialized whatever the profile.
+  const validation =
+    profile === 'EN 16931'
+      ? validateEn16931(invoice, validationOptions)
+      : validateCodeLists(invoice, validationOptions);
+
+  if (!validation.valid) {
+    throw new FacturXGenerateError(
+      `Invoice does not satisfy the ${profile} rules (${validation.errors.length} error(s))`,
+      validation.errors,
+    );
   }
 
   const xml = serialize(invoice, profile);
