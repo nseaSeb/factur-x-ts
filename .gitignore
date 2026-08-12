@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / tooling output
+coverage/
+*.log
+
+# Packaging
+*.tgz
+
+# Secrets and registry credentials
+.env
+.env.*
+.npmrc
+
+# Local tooling state
+.claude/settings.local.json
+.token-optimizer/
+
+# OS
+.DS_Store

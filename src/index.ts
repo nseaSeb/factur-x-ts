@@ -1,0 +1,29 @@
+// src/index.ts
+// Public API of factur-x-ts
+
+export type {
+  FacturXInvoice,
+  CurrencyCode,
+  DocumentTypeCode,
+  TradeParty,
+  PostalAddress,
+  TradeContact,
+  LineItem,
+  VatCategoryCode,
+  AllowanceCharge,
+  TaxBreakdown,
+  MonetaryTotals,
+  Note,
+  BillingPeriod,
+  PaymentMean,
+  PrecedingInvoice,
+  ParseResult,
+  GenerateOptions,
+  FacturXMetadata,
+} from './types/index.js';
+export { Profile } from './types/index.js';
+
+export type { ValidationError, ValidationErrorCode, ValidationResult } from './profiles/en16931.js';
+
+export { parse, FacturXParseError } from './pdf/parser.js';
+export { generate, FacturXGenerateError } from './pdf/generator.js';

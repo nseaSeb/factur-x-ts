@@ -1,0 +1,44 @@
+{
+  "name": "factur-x-ts",
+  "version": "0.1.0",
+  "description": "TypeScript-native Factur-X EN 16931 PDF/A-3 generator and parser. Strictly typed, zero any.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "schemas"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "fast-xml-parser": "^4.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "keywords": [
+    "factur-x",
+    "zugferd",
+    "e-invoice",
+    "pdf-a3",
+    "cii",
+    "en16931",
+    "chorus-pro"
+  ],
+  "license": "MIT"
+}
