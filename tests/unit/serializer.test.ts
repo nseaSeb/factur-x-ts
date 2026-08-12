@@ -59,6 +59,30 @@ describe('serialize + deserialize round-trip', () => {
     expect(roundTripped).toEqual(expectedRoundTrip(invoice));
   });
 
+  it('keeps line-level and document-level allowances and charges apart', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [
+        {
+          ...base.lines[0]!,
+          allowances: [{ amount: 3, reason: 'Remise ligne', vatCategory: 'S' as const, vatRate: 20 }],
+          charges: [{ amount: 4, reason: 'Frais ligne', vatCategory: 'S' as const, vatRate: 20 }],
+        },
+      ],
+      // base.allowances is the 5.00 document-level allowance (BT-107).
+      charges: [{ amount: 10, reason: 'Frais de port', vatCategory: 'S' as const, vatRate: 20 }],
+      taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 205, calculatedAmount: 41 }],
+      totals: { ...base.totals, chargeTotal: 10, taxBasisTotal: 205, taxTotal: 41, grandTotal: 246, duePayable: 246 },
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+
+    // Both levels survive without bleeding into each other, and the
+    // ChargeIndicator=true branch is exercised at each level.
+    expect(roundTripped).toEqual(expectedRoundTrip(invoice));
+  });
+
   it('handles an invoice with only mandatory fields', () => {
     const minimal = {
       number: 'INV-MIN-1',

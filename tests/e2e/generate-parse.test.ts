@@ -3,7 +3,16 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFString } from 'pdf-lib';
+import {
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFHexString,
+  PDFName,
+  PDFRawStream,
+  PDFString,
+  decodePDFRawStream,
+} from 'pdf-lib';
 import { generate } from '../../src/pdf/generator.js';
 import { parse } from '../../src/pdf/parser.js';
 import { sampleInvoice, expectedRoundTrip } from '../fixtures/invoice.js';
@@ -70,6 +79,24 @@ async function countFacturXAttachments(pdfBytes: Uint8Array): Promise<number> {
   return count;
 }
 
+/** Decoded contents of every embedded stream that holds a CII invoice, reachable or not. */
+async function embeddedInvoiceXmls(pdfBytes: Uint8Array): Promise<string[]> {
+  const doc = await PDFDocument.load(pdfBytes);
+  const found: string[] = [];
+
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8').decode(decodePDFRawStream(obj).decode());
+    } catch {
+      continue; // Not a decodable stream — irrelevant here.
+    }
+    if (text.includes('CrossIndustryInvoice')) found.push(text);
+  }
+  return found;
+}
+
 describe('regenerating over an existing Factur-X PDF', () => {
   async function regenerate(): Promise<Uint8Array> {
     const original = await generate({ invoice: sampleInvoice(), profile: 'EN 16931' });
@@ -86,9 +113,19 @@ describe('regenerating over an existing Factur-X PDF', () => {
     expect(await countFacturXAttachments(await regenerate())).toBe(1);
   });
 
-  it('leaves no recoverable trace of the superseded invoice', async () => {
-    // pdf-lib does not collect unreachable objects: a merely-unreferenced old
-    // attachment or XMP packet would still sit in the output bytes.
+  it('leaves exactly one embedded invoice XML, carrying the corrected invoice', async () => {
+    // Counting /AF entries is not enough: an orphaned attachment is unreachable
+    // from /AF yet still present in the file, since pdf-lib collects nothing.
+    // Enumerating indirect objects is what catches it without veraPDF.
+    const xmls = await embeddedInvoiceXmls(await regenerate());
+
+    expect(xmls).toHaveLength(1);
+    expect(xmls[0]).toContain('INV-2026-CORRECTED');
+    expect(xmls[0]).not.toContain('INV-2026-001');
+  });
+
+  it('leaves no superseded XMP packet in the output bytes', async () => {
+    // PDF/A forbids a filter on /Metadata, so a stale packet is greppable as-is.
     const text = new TextDecoder('latin1').decode(await regenerate());
     expect(text).not.toContain('INV-2026-001');
   });
