@@ -2,28 +2,28 @@
 // EN 16931 mandatory-field and core business-rule validation.
 
 import type { AllowanceCharge, FacturXInvoice, LineItem, TaxBreakdown, VatCategoryCode } from '../types/invoice.js';
+import type {
+  ValidationError,
+  ValidationErrorCode,
+  ValidationOptions,
+  ValidationResult,
+} from '../types/validation.js';
+import { validateFrenchBusinessProcess, validateUniformVatPointDate } from './fr.js';
 
-export type ValidationErrorCode =
-  | 'MISSING_FIELD'
-  | 'EMPTY_VALUE'
-  | 'NO_LINES'
-  | 'NO_TAX_BREAKDOWN'
-  | 'INVALID_VAT_RATE'
-  | 'MISSING_EXEMPTION_REASON'
-  | 'MISSING_BUYER_VAT_ID'
-  | 'MISSING_TAX_BREAKDOWN_GROUP'
-  | 'AMOUNT_MISMATCH';
+export type { ValidationError, ValidationErrorCode, ValidationOptions, ValidationResult };
 
-export interface ValidationError {
-  readonly code: ValidationErrorCode;
-  readonly field: string;
-  readonly message: string;
-}
-
-export interface ValidationResult {
-  readonly valid: boolean;
-  readonly errors: readonly ValidationError[];
-}
+/**
+ * BT-8, restricted by EN 16931 (BR-CL-06) to this subset of UNTDID 2475.
+ *
+ * The codes 3 / 35 / 432 seen widely quoted belong to UNTDID 2005, which is the
+ * UBL subset. Emitted in CII they pass the XSD — `qdt:TimeReferenceCodeType` is
+ * an unenumerated `xs:token` — and are then rejected by the Schematron.
+ */
+export const VAT_POINT_DATE_CODES: Readonly<Record<string, string>> = {
+  '5': 'date de la facture (TVA sur les débits)',
+  '29': 'date de livraison (livraison de biens)',
+  '72': 'date de paiement (TVA à l\'encaissement)',
+};
 
 // Amounts are 2-decimal EN 16931 values; this tolerance absorbs independent
 // per-line/per-breakdown rounding without masking genuine mismatches.
@@ -34,7 +34,8 @@ const ZERO_RATE_CATEGORIES: readonly VatCategoryCode[] = ['Z', 'E', 'G', 'O', 'K
 // Categories where a VAT exemption reason (text or code) must be given at breakdown level.
 const EXEMPTION_REQUIRED_CATEGORIES: readonly VatCategoryCode[] = ['E', 'O', 'AE'];
 
-export function validateEn16931(invoice: FacturXInvoice): ValidationResult {
+export function validateEn16931(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
+  const { validateVatPointDate = true, validateBusinessProcess = false } = options;
   const errors: ValidationError[] = [];
 
   if (invoice.number.trim() === '') {
@@ -69,7 +70,48 @@ export function validateEn16931(invoice: FacturXInvoice): ValidationResult {
   validateTaxBreakdownCoversLines(invoice, errors);
   validateAmounts(invoice, errors);
 
+  if (validateVatPointDate) validateVatPointDateCodes(invoice, errors);
+  if (validateBusinessProcess) {
+    validateFrenchBusinessProcess(invoice, errors);
+    validateUniformVatPointDate(invoice, errors);
+  }
+
   return { valid: errors.length === 0, errors };
+}
+
+/** BR-CL-06, plus the case where a document-level BT-8 has nowhere to be emitted. */
+function validateVatPointDateCodes(invoice: FacturXInvoice, errors: ValidationError[]): void {
+  const documentCode = invoice.taxDueDateTypeCode;
+
+  // A document-level code with no BG-23 to carry it would be dropped in silence
+  // by the serializer. Losing a VAT point-date is not an acceptable no-op.
+  if (documentCode !== undefined && invoice.taxBreakdown.length === 0) {
+    errors.push(
+      field(
+        'taxDueDateTypeCode',
+        'UNEMITTABLE_VAT_POINT_DATE',
+        `taxDueDateTypeCode ${documentCode} cannot be emitted: BT-8 lives inside ram:ApplicableTradeTax and there is no VAT breakdown group`,
+      ),
+    );
+  }
+
+  if (documentCode !== undefined && !(documentCode in VAT_POINT_DATE_CODES)) {
+    errors.push(invalidVatPointDate('taxDueDateTypeCode', documentCode));
+  }
+
+  invoice.taxBreakdown.forEach((tb, index) => {
+    if (tb.dueDateTypeCode !== undefined && !(tb.dueDateTypeCode in VAT_POINT_DATE_CODES)) {
+      errors.push(invalidVatPointDate(`taxBreakdown[${index}].dueDateTypeCode`, tb.dueDateTypeCode));
+    }
+  });
+}
+
+function invalidVatPointDate(fieldName: string, code: string): ValidationError {
+  return field(
+    fieldName,
+    'INVALID_VAT_POINT_DATE',
+    `VAT point date code "${code}" is not one of ${Object.keys(VAT_POINT_DATE_CODES).join(' / ')} (BR-CL-06). Codes 3/35/432 belong to UNTDID 2005 and are valid in UBL only, not CII`,
+  );
 }
 
 function validateLine(line: LineItem, index: number, errors: ValidationError[]): void {

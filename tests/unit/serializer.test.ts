@@ -83,6 +83,34 @@ describe('serialize + deserialize round-trip', () => {
     expect(roundTripped).toEqual(expectedRoundTrip(invoice));
   });
 
+  it('lifts a uniform BT-8 back to the document level', () => {
+    const invoice = sampleInvoice(); // taxDueDateTypeCode: '5', one breakdown
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+
+    expect(roundTripped.taxDueDateTypeCode).toBe('5');
+    expect(roundTripped.taxBreakdown[0]).not.toHaveProperty('dueDateTypeCode');
+  });
+
+  it('keeps divergent BT-8 codes per entry instead of collapsing them', () => {
+    // EN 16931 allows differing codes per breakdown; only the French rule S1.13
+    // forbids it. Collapsing "29, 72" into "29, 29" would silently falsify the
+    // VAT point date of the second entry.
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      taxDueDateTypeCode: undefined,
+      taxBreakdown: [
+        { type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 100, calculatedAmount: 20, dueDateTypeCode: '29' },
+        { type: 'VAT' as const, category: 'S' as const, rate: 10, basisAmount: 95, calculatedAmount: 9.5, dueDateTypeCode: '72' },
+      ],
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+
+    expect(roundTripped.taxDueDateTypeCode).toBeUndefined();
+    expect(roundTripped.taxBreakdown.map((tb) => tb.dueDateTypeCode)).toEqual(['29', '72']);
+  });
+
   it('handles an invoice with only mandatory fields', () => {
     const minimal = {
       number: 'INV-MIN-1',

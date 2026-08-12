@@ -98,6 +98,7 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 | --- | --- |
 | `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice. Throws `FacturXGenerateError`. |
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
+| `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 validation. |
@@ -117,6 +118,44 @@ try {
   }
 }
 ```
+
+## French e-invoicing reform
+
+No separate schema or profile is needed for the French mandate. Verified against the DGFiP *spécifications externes B2B* v3.2: the requirement reduces to two business terms already present in the EN 16931 CII vocabulary, and both are `minOccurs="0"` in the standard XSD.
+
+| Term | Field | CII path |
+| --- | --- | --- |
+| **BT-23** cadre de facturation | `invoice.businessProcess` | `ExchangedDocumentContext/BusinessProcessSpecifiedDocumentContextParameter/ID` |
+| **BT-8** exigibilité TVA | `invoice.taxDueDateTypeCode` | `ApplicableHeaderTradeSettlement/ApplicableTradeTax/DueDateTypeCode` |
+
+The PPF control profile (`Base` / `Full`) is a **separate axis** from the Factur-X profile: it is carried by the transmitted filename prefix (rule S1.06), not by BT-24. The widely-cited URN `…extended-ctc-fr` does not exist in the specifications. Naming the transmitted file is the caller's responsibility — this library produces a document, not a flux.
+
+```ts
+await generate({
+  invoice,
+  profile: 'EN 16931',
+  validation: { validateBusinessProcess: true }, // French rules G1.02, G1.60, S1.13
+});
+```
+
+Two validation switches, with deliberately different defaults:
+
+| Option | Default | Why |
+| --- | --- | --- |
+| `validateVatPointDate` | **on** | BT-8 is restricted by EN 16931 itself (BR-CL-06) to `5` / `29` / `72`, so the check is universally correct. |
+| `validateBusinessProcess` | **off** | BT-23 values are *not* restricted by EN 16931 — Peppol uses `urn:fdc:peppol.eu:…`, Chorus Pro uses `A1`/`A2`. Applying the French closed list universally would lock out non-French callers and break round-tripping of third-party documents. |
+
+Both stay switchable: "invalid" does not mean "must never be serializable", and the *extract → parse → correct → generate* pipeline over a received invoice is a central use case.
+
+Exported code tables: `BUSINESS_PROCESS_CODES` (the 13 G1.02 codes) and `VAT_POINT_DATE_CODES`.
+
+> The codes `3` / `35` / `432` are frequently quoted for BT-8 but belong to UNTDID **2005**, which is the **UBL** subset. In CII they pass the XSD — `qdt:TimeReferenceCodeType` is an unenumerated `xs:token` — and are then rejected by the Schematron, hence by the platform. `validateVatPointDate` catches them immediately.
+
+### BT-8 round-trips exactly
+
+BT-8 lives inside each `ram:ApplicableTradeTax`, but French rule S1.13 requires one value per document, so `taxDueDateTypeCode` is a document-level field copied onto every entry when serializing.
+
+On parsing, a **uniform** code is lifted back to the document level; **divergent** codes are kept per entry and no document-level field is produced. EN 16931 permits differing codes per entry, so collapsing `29, 72` into `29, 29` would silently falsify the VAT point date of the second entry — this library will not do that. `parse(generate(invoice))` reproduces `invoice` in both cases.
 
 ## Allowances and charges
 

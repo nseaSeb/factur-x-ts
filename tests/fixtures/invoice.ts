@@ -64,20 +64,14 @@ export function sampleInvoice(): FacturXInvoice {
 }
 
 /**
- * Expected shape after a serialize -> deserialize round-trip.
+ * A round-trip is now exact: there is no expected drift to model.
  *
- * The top-level `taxDueDateTypeCode` (French-mandate BT-8 default) is folded
- * into each `taxBreakdown[].dueDateTypeCode` on serialize and is not
- * reconstructed at the top level on deserialize — the per-breakdown value is
- * the round-trip-stable representation. See src/xml/serializer.ts.
+ * The document-level `taxDueDateTypeCode` (BT-8) is copied onto every
+ * `ram:ApplicableTradeTax` on serialize and lifted back on deserialize when all
+ * entries agree, so `parse(generate(invoice))` reproduces `invoice` verbatim.
+ * A document whose entries carry *differing* codes keeps them per-entry instead
+ * — see normalizeVatPointDate in src/xml/deserializer.ts.
  */
-export function expectedRoundTrip(invoice: FacturXInvoice): unknown {
-  const { taxDueDateTypeCode, ...rest } = invoice;
-  return {
-    ...rest,
-    taxBreakdown: invoice.taxBreakdown.map((tb) => ({
-      ...tb,
-      dueDateTypeCode: tb.dueDateTypeCode ?? taxDueDateTypeCode,
-    })),
-  };
+export function expectedRoundTrip(invoice: FacturXInvoice): FacturXInvoice {
+  return invoice;
 }

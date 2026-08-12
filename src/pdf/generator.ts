@@ -42,10 +42,10 @@ const OUTPUT_CONDITION_IDENTIFIER = 'sRGB IEC61966-2.1';
 const DATA_RELATIONSHIP_PROFILES: readonly Profile[] = ['MINIMUM', 'BASIC WL'];
 
 export async function generate(options: GenerateOptions): Promise<Uint8Array> {
-  const { invoice, profile, visualPdf } = options;
+  const { invoice, profile, visualPdf, validation: validationOptions } = options;
 
   if (profile === 'EN 16931') {
-    const validation = validateEn16931(invoice);
+    const validation = validateEn16931(invoice, validationOptions);
     if (!validation.valid) {
       throw new FacturXGenerateError(
         `Invoice does not satisfy EN 16931 mandatory rules (${validation.errors.length} error(s))`,

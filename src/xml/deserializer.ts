@@ -254,7 +254,9 @@ export function deserialize(xml: string): FacturXInvoice {
   const businessProcess = context?.BusinessProcessSpecifiedDocumentContextParameter?.ID;
   const notes = (document.IncludedNote ?? []).map(parseNote);
   const lines = (transaction.IncludedSupplyChainTradeLineItem ?? []).map(parseLineItem);
-  const taxBreakdown = (settlement.ApplicableTradeTax ?? []).map(parseTaxBreakdown);
+  const { entries: taxBreakdown, documentCode: taxDueDateTypeCode } = normalizeVatPointDate(
+    (settlement.ApplicableTradeTax ?? []).map(parseTaxBreakdown),
+  );
   const totals = parseMonetaryTotals(settlement.SpecifiedTradeSettlementHeaderMonetarySummation);
   const paymentMeans = (settlement.SpecifiedTradeSettlementPaymentMeans ?? []).map(parsePaymentMeans);
   const precedingInvoices = (settlement.InvoiceReferencedDocument ?? []).map(parsePrecedingInvoice);
@@ -285,6 +287,40 @@ export function deserialize(xml: string): FacturXInvoice {
     ...(paymentMeans.length > 0 ? { paymentMeans } : {}),
     ...(precedingInvoices.length > 0 ? { precedingInvoices } : {}),
     ...(businessProcess ? { businessProcess } : {}),
+    ...(taxDueDateTypeCode !== undefined ? { taxDueDateTypeCode } : {}),
+  };
+}
+
+/**
+ * Lifts a uniform BT-8 back to the document level, reversibly.
+ *
+ * BT-8 lives inside each ram:ApplicableTradeTax, but the French rule S1.13
+ * requires one value per document, which makes a single document-level field the
+ * natural representation — the serializer copies it onto every entry.
+ *
+ * Reading it back per-entry only would be lossy in the other direction: a
+ * document-level code would come back spread across the breakdown, so
+ * `parse(generate(invoice))` would not equal `invoice`. Reading it back
+ * document-level only would be worse — a legitimately divergent third-party
+ * document (EN 16931 permits differing codes per entry) would round-trip
+ * `29, 72` into `29, 29`, silently falsifying the VAT point date of the second
+ * entry. Corrupting tax data without saying so is the worst option available.
+ *
+ * So: uniform code is lifted and stripped from the entries; divergent codes stay
+ * where they are and no document-level field is produced.
+ */
+function normalizeVatPointDate(breakdown: TaxBreakdown[]): {
+  readonly entries: TaxBreakdown[];
+  readonly documentCode: string | undefined;
+} {
+  const codes = new Set(breakdown.map((tb) => tb.dueDateTypeCode));
+  const uniform = breakdown.length > 0 && codes.size === 1 && !codes.has(undefined);
+
+  if (!uniform) return { entries: breakdown, documentCode: undefined };
+
+  return {
+    entries: breakdown.map(({ dueDateTypeCode: _lifted, ...rest }) => rest),
+    documentCode: breakdown[0]?.dueDateTypeCode,
   };
 }
 

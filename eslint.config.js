@@ -38,6 +38,18 @@ export default tseslint.config(
   },
 
   {
+    files: ['src/**/*.ts', 'tests/**/*.ts'],
+    rules: {
+      // A leading underscore marks a binding that exists only to be omitted —
+      // notably the `const { x: _x, ...rest }` idiom used to drop a property.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
+    },
+  },
+
+  {
     // The config file itself is plain JS and outside every tsconfig.
     files: ['eslint.config.js'],
     extends: [tseslint.configs.disableTypeChecked],
