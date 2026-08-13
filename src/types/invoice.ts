@@ -9,6 +9,8 @@ export interface FacturXInvoice {
 
   readonly seller: TradeParty;
   readonly buyer: TradeParty;
+  /** BG-11 — représentant fiscal du vendeur. Seul son `vatId` (BT-63) est réglementaire. */
+  readonly taxRepresentative?: TradeParty;
 
   readonly lines: LineItem[];
   readonly taxBreakdown: TaxBreakdown[];
@@ -41,7 +43,28 @@ export type DocumentTypeCode = '380' | '381' | '386' | '500';
 
 export interface TradeParty {
   readonly name: string;
+  /** BT-31 / BT-48 — identifiant à la TVA, émis avec `schemeID="VA"`. */
   readonly vatId?: string;
+  /**
+   * BT-30 (vendeur) / BT-47 (acheteur) — SIREN.
+   *
+   * Obligatoire `1..1` pour le domestique français dès la trajectoire
+   * DEMARRAGE. Émis dans `ram:SpecifiedLegalOrganization/ram:ID`.
+   */
+  readonly legalId?: string;
+  /** BT-30-1 / BT-47-1 — schéma de `legalId`. Défaut `'0002'` (SIRENE). */
+  readonly legalScheme?: string;
+  /**
+   * BT-29d — SIREN d'un assujetti unique (groupe TVA).
+   *
+   * L'annexe ne le prévoit que côté vendeur ; c'est pourquoi le schéma par
+   * défaut `'0231'` n'est appliqué qu'au vendeur — l'imposer partout
+   * étiquetterait par exemple un GLN d'acheteur comme un identifiant de
+   * groupe TVA français.
+   */
+  readonly globalId?: string;
+  /** BT-29d-1 — schéma de `globalId`. Défaut `'0231'` sur le vendeur seul. */
+  readonly globalScheme?: string;
   readonly address: PostalAddress;
   readonly contact?: TradeContact;
 }

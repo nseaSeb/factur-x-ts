@@ -176,15 +176,26 @@ function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean, curre
 // ---- ApplicableHeaderTradeAgreement ----
 
 function buildApplicableHeaderTradeAgreement(invoice: FacturXInvoice): string {
+  const taxRepresentative = invoice.taxRepresentative
+    ? buildTradeParty(invoice.taxRepresentative, 'ram:SellerTaxRepresentativeTradeParty')
+    : '';
+
   return (
     `<ram:ApplicableHeaderTradeAgreement>` +
-    buildTradeParty(invoice.seller, 'ram:SellerTradeParty') +
+    buildTradeParty(invoice.seller, 'ram:SellerTradeParty', SELLER_GLOBAL_ID_SCHEME) +
     buildTradeParty(invoice.buyer, 'ram:BuyerTradeParty') +
+    // CII sequence: SellerTaxRepresentativeTradeParty follows BuyerTradeParty.
+    taxRepresentative +
     `</ram:ApplicableHeaderTradeAgreement>`
   );
 }
 
-function buildTradeParty(party: TradeParty, tag: string): string {
+/** BT-30-1 / BT-47-1 — SIRENE. */
+const LEGAL_ID_SCHEME = '0002';
+/** BT-29d-1 — French VAT group (assujetti unique). Seller only, per the annexe. */
+const SELLER_GLOBAL_ID_SCHEME = '0231';
+
+function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: string): string {
   const contact = party.contact
     ? `<ram:DefinedTradeContact>` +
       (party.contact.name ? el('ram:PersonName', party.contact.name) : '') +
@@ -212,7 +223,22 @@ function buildTradeParty(party: TradeParty, tag: string): string {
     ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(party.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>`
     : '';
 
-  return `<${tag}>${el('ram:Name', party.name)}${contact}${postalAddress}${taxRegistration}</${tag}>`;
+  // TradePartyType sequence: GlobalID, Name, SpecifiedLegalOrganization,
+  // DefinedTradeContact, PostalTradeAddress, SpecifiedTaxRegistration.
+  const globalScheme = party.globalScheme ?? defaultGlobalScheme;
+  const globalId =
+    party.globalId !== undefined
+      ? `<ram:GlobalID${globalScheme !== undefined ? ` schemeID="${xmlEscape(globalScheme)}"` : ''}>${xmlEscape(party.globalId)}</ram:GlobalID>`
+      : '';
+
+  const legalOrganization =
+    party.legalId !== undefined
+      ? `<ram:SpecifiedLegalOrganization>` +
+        `<ram:ID schemeID="${xmlEscape(party.legalScheme ?? LEGAL_ID_SCHEME)}">${xmlEscape(party.legalId)}</ram:ID>` +
+        `</ram:SpecifiedLegalOrganization>`
+      : '';
+
+  return `<${tag}>${globalId}${el('ram:Name', party.name)}${legalOrganization}${contact}${postalAddress}${taxRegistration}</${tag}>`;
 }
 
 // ---- ApplicableHeaderTradeSettlement ----

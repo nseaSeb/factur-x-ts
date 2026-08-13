@@ -18,7 +18,7 @@ export interface GenerateOptions {
   readonly visualPdf?: Uint8Array;
   /**
    * Réglage de la validation EN 16931, appliquée avant écriture pour le profil
-   * `EN 16931`. Voir `ValidationOptions` — activer `validateBusinessProcess`
+   * `EN 16931`. Voir `ValidationOptions` — activer `validateFrenchRules`
    * pour le socle réglementaire français.
    */
   readonly validation?: ValidationOptions;

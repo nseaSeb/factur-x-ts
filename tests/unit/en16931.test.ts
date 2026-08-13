@@ -123,13 +123,13 @@ describe('validateEn16931', () => {
 
     it('rejects a business process outside the G1.02 list when enabled', () => {
       const invoice = { ...sampleInvoice(), businessProcess: 'X9' };
-      const result = validateEn16931(invoice, { validateBusinessProcess: true });
+      const result = validateEn16931(invoice, { validateFrenchRules: true });
       expect(result.errors.some((e) => e.code === 'INVALID_BUSINESS_PROCESS')).toBe(true);
     });
 
     it('keeps the G1.02 list closed against Object.prototype member names', () => {
       for (const code of ['constructor', 'valueOf', 'hasOwnProperty']) {
-        const result = validateEn16931({ ...sampleInvoice(), businessProcess: code }, { validateBusinessProcess: true });
+        const result = validateEn16931({ ...sampleInvoice(), businessProcess: code }, { validateFrenchRules: true });
         expect(result.errors.some((e) => e.code === 'INVALID_BUSINESS_PROCESS'), code).toBe(true);
       }
     });
@@ -146,26 +146,65 @@ describe('validateEn16931', () => {
           { ...invoice.taxBreakdown[0]!, rate: 10 },
         ],
       };
-      const result = validateEn16931(partial, { validateBusinessProcess: true });
+      const result = validateEn16931(partial, { validateFrenchRules: true });
       const inconsistent = result.errors.find((e) => e.code === 'INCONSISTENT_VAT_POINT_DATE');
 
       expect(inconsistent).toBeDefined();
       expect(inconsistent?.message).toContain('(absent)');
     });
 
+    it('requires the SIREN of both parties when enabled (BT-30 / BT-47)', () => {
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        seller: { ...base.seller, legalId: undefined },
+        buyer: { ...base.buyer, legalId: undefined },
+      };
+      const errors = validateEn16931(invoice, { validateFrenchRules: true }).errors;
+
+      expect(errors.filter((e) => e.code === 'MISSING_LEGAL_ID').map((e) => e.field)).toEqual([
+        'seller.legalId',
+        'buyer.legalId',
+      ]);
+    });
+
+    it('does not require a SIREN by default', () => {
+      const base = sampleInvoice();
+      const invoice = { ...base, seller: { ...base.seller, legalId: undefined } };
+      expect(validateEn16931(invoice).valid).toBe(true);
+    });
+
+    it('rejects a SIREN that is not 9 digits', () => {
+      const base = sampleInvoice();
+      const invoice = { ...base, seller: { ...base.seller, legalId: '1234' } };
+      const result = validateEn16931(invoice, { validateFrenchRules: true });
+
+      expect(result.errors.some((e) => e.code === 'INVALID_LEGAL_ID')).toBe(true);
+    });
+
+    it('does not check the digit shape under a non-SIRENE scheme', () => {
+      // A party identified under another scheme legitimately carries something
+      // that is not a SIREN.
+      const base = sampleInvoice();
+      const invoice = { ...base, seller: { ...base.seller, legalId: 'GB-12345', legalScheme: '0060' } };
+      const result = validateEn16931(invoice, { validateFrenchRules: true });
+
+      expect(result.errors.some((e) => e.code === 'INVALID_LEGAL_ID')).toBe(false);
+    });
+
     it('requires BT-23 when enabled', () => {
       const invoice = { ...sampleInvoice(), businessProcess: undefined };
-      const result = validateEn16931(invoice, { validateBusinessProcess: true });
+      const result = validateEn16931(invoice, { validateFrenchRules: true });
       expect(result.errors.some((e) => e.code === 'MISSING_BUSINESS_PROCESS')).toBe(true);
     });
 
     it('accepts the sample invoice, which carries S1', () => {
-      expect(validateEn16931(sampleInvoice(), { validateBusinessProcess: true }).valid).toBe(true);
+      expect(validateEn16931(sampleInvoice(), { validateFrenchRules: true }).valid).toBe(true);
     });
 
     it('rejects a down-payment type code under a final-invoice process (G1.60)', () => {
       const invoice = { ...sampleInvoice(), businessProcess: 'S4', typeCode: '386' as const };
-      const result = validateEn16931(invoice, { validateBusinessProcess: true });
+      const result = validateEn16931(invoice, { validateFrenchRules: true });
       expect(result.errors.some((e) => e.code === 'FORBIDDEN_TYPE_CODE_FOR_BUSINESS_PROCESS')).toBe(true);
     });
 
@@ -179,7 +218,7 @@ describe('validateEn16931', () => {
           { ...invoice.taxBreakdown[0]!, dueDateTypeCode: '72' },
         ],
       };
-      const result = validateEn16931(divergent, { validateBusinessProcess: true });
+      const result = validateEn16931(divergent, { validateFrenchRules: true });
       expect(result.errors.some((e) => e.code === 'INCONSISTENT_VAT_POINT_DATE')).toBe(true);
 
       // The same document is fine under bare EN 16931.

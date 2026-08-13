@@ -121,12 +121,19 @@ try {
 
 ## French e-invoicing reform
 
-No separate schema or profile is needed for the French mandate. Verified against the DGFiP *spécifications externes B2B* v3.2: the requirement reduces to two business terms already present in the EN 16931 CII vocabulary, and both are `minOccurs="0"` in the standard XSD.
+No separate schema or profile is needed for the French mandate. Verified against the DGFiP *spécifications externes B2B* v3.2: everything it requires is already in the EN 16931 CII vocabulary.
 
-| Term | Field | CII path |
-| --- | --- | --- |
-| **BT-23** cadre de facturation | `invoice.businessProcess` | `ExchangedDocumentContext/BusinessProcessSpecifiedDocumentContextParameter/ID` |
-| **BT-8** exigibilité TVA | `invoice.taxDueDateTypeCode` | `ApplicableHeaderTradeSettlement/ApplicableTradeTax/DueDateTypeCode` |
+| Term | Card. | Field | CII path (under the party, or the document) |
+| --- | --- | --- | --- |
+| **BT-23** cadre de facturation | 1..1 | `invoice.businessProcess` | `ExchangedDocumentContext/BusinessProcessSpecifiedDocumentContextParameter/ID` |
+| **BT-8** exigibilité TVA | 0..1 | `invoice.taxDueDateTypeCode` | `ApplicableHeaderTradeSettlement/ApplicableTradeTax/DueDateTypeCode` |
+| **BT-30 / BT-47** SIREN | 1..1 | `seller.legalId`, `buyer.legalId` | `SpecifiedLegalOrganization/ID` with `@schemeID` (default `0002`) |
+| **BT-29d** assujetti unique | 0..1 | `seller.globalId` | `GlobalID` with `@schemeID` (default `0231`, **seller only**) |
+| **BG-11** représentant fiscal | 0..1 | `invoice.taxRepresentative` | `SellerTaxRepresentativeTradeParty` |
+
+The `0231` default is applied to the seller alone because that is where the annexe puts BT-29d. Applying it everywhere would mislabel, say, a buyer's GLN as a French VAT-group identifier.
+
+Coverage against *Annexe 1 — Flux 1 v1.2*: **77 of the 96** regulatory data reachable in EN 16931 (the remaining 20 of 116 exist only in the EXTENDED profile). No mandatory DEMARRAGE datum is missing; what remains is delivery information (BG-13/BG-15), payment terms (BT-9), line-level billing period and line notes — all CIBLE or optional.
 
 The PPF control profile (`Base` / `Full`) is a **separate axis** from the Factur-X profile: it is carried by the transmitted filename prefix (rule S1.06), not by BT-24. The widely-cited URN `…extended-ctc-fr` does not exist in the specifications. Naming the transmitted file is the caller's responsibility — this library produces a document, not a flux.
 
@@ -134,7 +141,7 @@ The PPF control profile (`Base` / `Full`) is a **separate axis** from the Factur
 await generate({
   invoice,
   profile: 'EN 16931',
-  validation: { validateBusinessProcess: true }, // French rules G1.02, G1.60, S1.13
+  validation: { validateFrenchRules: true }, // G1.02, G1.60, S1.13, BT-30/BT-47
 });
 ```
 
@@ -143,7 +150,7 @@ Two validation switches, with deliberately different defaults:
 | Option | Default | Why |
 | --- | --- | --- |
 | `validateVatPointDate` | **on** | BT-8 is restricted by EN 16931 itself (BR-CL-06) to `5` / `29` / `72`, so the check is universally correct. |
-| `validateBusinessProcess` | **off** | BT-23 values are *not* restricted by EN 16931 — Peppol uses `urn:fdc:peppol.eu:…`, Chorus Pro uses `A1`/`A2`. Applying the French closed list universally would lock out non-French callers and break round-tripping of third-party documents. |
+| `validateFrenchRules` | **off** | None of these are EN 16931 restrictions. BT-23 values are unrestricted by the standard — Peppol uses `urn:fdc:peppol.eu:…`, Chorus Pro uses `A1`/`A2` — and SIREN is meaningless outside France. Applying either universally would lock out non-French callers and break round-tripping of third-party documents. |
 
 Both stay switchable: "invalid" does not mean "must never be serializable", and the *extract → parse → correct → generate* pipeline over a received invoice is a central use case.
 
@@ -168,7 +175,7 @@ BT-8 lives inside each `ram:ApplicableTradeTax`, but French rule S1.13 requires 
 
 Every rewrite is semantically identical to its input. What the library will **not** do is collapse divergent codes: EN 16931 permits differing codes per entry, so turning `29, 72` into `29, 29` would silently falsify the second entry's VAT point date.
 
-Under `validateBusinessProcess`, rule S1.13 rejects both divergent codes and a BT-8 present on only *some* breakdown groups — the latter being the likelier mistake, since it serializes `ram:DueDateTypeCode` onto some `BG-23` groups and not others.
+Under `validateFrenchRules`, rule S1.13 rejects both divergent codes and a BT-8 present on only *some* breakdown groups — the latter being the likelier mistake, since it serializes `ram:DueDateTypeCode` onto some `BG-23` groups and not others.
 
 ## Allowances and charges
 

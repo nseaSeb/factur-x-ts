@@ -8,7 +8,7 @@ import type {
   ValidationOptions,
   ValidationResult,
 } from '../types/validation.js';
-import { validateFrenchBusinessProcess, validateUniformVatPointDate } from './fr.js';
+import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformVatPointDate } from './fr.js';
 
 export type { ValidationError, ValidationErrorCode, ValidationOptions, ValidationResult };
 
@@ -44,13 +44,14 @@ const EXEMPTION_REQUIRED_CATEGORIES: readonly VatCategoryCode[] = ['E', 'O', 'AE
  * profiles legitimately omitting fields it requires.
  */
 export function validateCodeLists(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
-  const { validateVatPointDate = true, validateBusinessProcess = false } = options;
+  const { validateVatPointDate = true, validateFrenchRules = false } = options;
   const errors: ValidationError[] = [];
 
   if (validateVatPointDate) validateVatPointDateCodes(invoice, errors);
-  if (validateBusinessProcess) {
+  if (validateFrenchRules) {
     validateFrenchBusinessProcess(invoice, errors);
     validateUniformVatPointDate(invoice, errors);
+    validateFrenchLegalIds(invoice, errors);
   }
 
   return { valid: errors.length === 0, errors };

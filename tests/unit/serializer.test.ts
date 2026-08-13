@@ -141,6 +141,73 @@ describe('serialize + deserialize round-trip', () => {
     expect(deserialize(serialize(invoice, 'EN 16931'))).toEqual(expectedRoundTrip(invoice));
   });
 
+  it('round-trips SIREN identifiers on both parties', () => {
+    const roundTripped = deserialize(serialize(sampleInvoice(), 'EN 16931'));
+
+    expect(roundTripped.seller.legalId).toBe('123456789');
+    expect(roundTripped.seller.legalScheme).toBe('0002');
+    expect(roundTripped.buyer.legalId).toBe('987654321');
+  });
+
+  it('defaults the SIREN scheme to 0002 and returns it materialised', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, seller: { ...base.seller, legalScheme: undefined } };
+
+    const xml = serialize(invoice, 'EN 16931');
+    expect(xml).toContain('<ram:SpecifiedLegalOrganization><ram:ID schemeID="0002">123456789</ram:ID>');
+
+    // The document is unchanged by the default; the model comes back enriched
+    // with what the document actually says.
+    expect(deserialize(xml).seller.legalScheme).toBe('0002');
+  });
+
+  it('defaults the GlobalID scheme to 0231 on the seller only', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      seller: { ...base.seller, globalId: '111222333' },
+      buyer: { ...base.buyer, globalId: '3401234567890' }, // a GLN, not a SIREN
+    };
+
+    const xml = serialize(invoice, 'EN 16931');
+    expect(xml).toContain('<ram:GlobalID schemeID="0231">111222333</ram:GlobalID>');
+    expect(xml).toContain('<ram:GlobalID>3401234567890</ram:GlobalID>');
+
+    const back = deserialize(xml);
+    expect(back.seller.globalScheme).toBe('0231');
+    expect(back.buyer.globalScheme).toBeUndefined();
+  });
+
+  it('places party identifiers in CII sequence order', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, seller: { ...base.seller, globalId: '111222333' } };
+    const seller = serialize(invoice, 'EN 16931').split('<ram:SellerTradeParty>')[1]!;
+
+    // TradePartyType: GlobalID, Name, SpecifiedLegalOrganization, contact,
+    // address, SpecifiedTaxRegistration. Nothing validates this without an XSD.
+    const order = ['<ram:GlobalID', '<ram:Name>', '<ram:SpecifiedLegalOrganization>', '<ram:PostalTradeAddress>'].map(
+      (tag) => seller.indexOf(tag),
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every((i) => i >= 0)).toBe(true);
+  });
+
+  it('round-trips the seller tax representative (BG-11)', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      taxRepresentative: {
+        name: 'Représentant Fiscal SAS',
+        vatId: 'FR99887766554',
+        address: { lineOne: '9 rue Fiscale', postcode: '75002', city: 'Paris', country: 'FR' },
+      },
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+    expect(roundTripped.taxRepresentative?.vatId).toBe('FR99887766554');
+    expect(roundTripped.taxRepresentative?.name).toBe('Représentant Fiscal SAS');
+  });
+
   it('handles an invoice with only mandatory fields', () => {
     const minimal = {
       number: 'INV-MIN-1',

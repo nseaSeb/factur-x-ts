@@ -14,6 +14,8 @@ export function sampleInvoice(): FacturXInvoice {
     seller: {
       name: 'Ma Société SARL',
       vatId: 'FR12345678901',
+      legalId: '123456789', // BT-30, SIREN
+      legalScheme: '0002',
       address: {
         lineOne: '1 rue de la Paix',
         postcode: '75001',
@@ -24,6 +26,8 @@ export function sampleInvoice(): FacturXInvoice {
     },
     buyer: {
       name: 'Client & Co "Spécial"',
+      legalId: '987654321', // BT-47, SIREN
+      legalScheme: '0002',
       address: {
         lineOne: '2 avenue des Champs',
         postcode: '69000',

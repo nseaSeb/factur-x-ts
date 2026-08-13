@@ -105,6 +105,48 @@ export function validateUniformVatPointDate(invoice: FacturXInvoice, errors: Val
   }
 }
 
+/** SIREN: 9 digits. Only meaningful under the SIRENE scheme. */
+const SIREN_PATTERN = /^\d{9}$/;
+
+/**
+ * BT-30 / BT-47 — the SIREN of each party, mandatory 1..1 from the DEMARRAGE
+ * trajectory. A domestic invoice without them is rejected by the platform, and
+ * no schema validation can substitute for a value the caller never supplied.
+ */
+export function validateFrenchLegalIds(invoice: FacturXInvoice, errors: ValidationError[]): void {
+  for (const [role, term, party] of [
+    ['seller', 'BT-30', invoice.seller],
+    ['buyer', 'BT-47', invoice.buyer],
+  ] as const) {
+    if (party.legalId === undefined || party.legalId.trim() === '') {
+      errors.push(
+        error(
+          `${role}.legalId`,
+          'MISSING_LEGAL_ID',
+          `Le numéro SIREN (${term}) est obligatoire pour la réforme française`,
+        ),
+      );
+      continue;
+    }
+
+    // Shape is only checkable under SIRENE. A party identified under another
+    // scheme legitimately carries something that is not a SIREN.
+    const scheme = party.legalScheme ?? SIRENE_SCHEME;
+    if (scheme === SIRENE_SCHEME && !SIREN_PATTERN.test(party.legalId)) {
+      errors.push(
+        error(
+          `${role}.legalId`,
+          'INVALID_LEGAL_ID',
+          `Le SIREN (${term}) « ${party.legalId} » doit comporter 9 chiffres`,
+        ),
+      );
+    }
+  }
+}
+
+/** BT-30-1 / BT-47-1 default — must match the serializer's. */
+const SIRENE_SCHEME = '0002';
+
 function error(field: string, code: ValidationErrorCode, message: string): ValidationError {
   return { field, code, message };
 }

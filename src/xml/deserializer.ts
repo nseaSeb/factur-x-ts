@@ -64,8 +64,12 @@ interface ParsedTaxRegistration {
   readonly ID?: string | (TextNode & { readonly '@_schemeID'?: string });
 }
 
+type SchemedIdNode = string | (TextNode & { readonly '@_schemeID'?: string });
+
 interface ParsedTradeParty {
+  readonly GlobalID?: SchemedIdNode;
   readonly Name?: string;
+  readonly SpecifiedLegalOrganization?: { readonly ID?: SchemedIdNode };
   readonly DefinedTradeContact?: ParsedTradeContact;
   readonly PostalTradeAddress?: ParsedPostalAddress;
   readonly SpecifiedTaxRegistration?: ParsedTaxRegistration;
@@ -74,6 +78,7 @@ interface ParsedTradeParty {
 interface ParsedHeaderTradeAgreement {
   readonly SellerTradeParty?: ParsedTradeParty;
   readonly BuyerTradeParty?: ParsedTradeParty;
+  readonly SellerTaxRepresentativeTradeParty?: ParsedTradeParty;
 }
 
 interface ParsedLineTradeTax {
@@ -277,6 +282,9 @@ export function deserialize(xml: string): FacturXInvoice {
     typeCode: asDocumentTypeCode(document.TypeCode),
     seller: parseTradeParty(agreement.SellerTradeParty),
     buyer: parseTradeParty(agreement.BuyerTradeParty),
+    ...(agreement.SellerTaxRepresentativeTradeParty
+      ? { taxRepresentative: parseTradeParty(agreement.SellerTaxRepresentativeTradeParty) }
+      : {}),
     lines,
     taxBreakdown,
     totals,
@@ -345,12 +353,30 @@ function parseTradeParty(node: ParsedTradeParty): TradeParty {
   const vatId = textOf(node.SpecifiedTaxRegistration?.ID);
   const contact = parseTradeContact(node.DefinedTradeContact);
 
+  const globalId = textOf(node.GlobalID);
+  const globalScheme = schemeOf(node.GlobalID);
+  const legalId = textOf(node.SpecifiedLegalOrganization?.ID);
+  const legalScheme = schemeOf(node.SpecifiedLegalOrganization?.ID);
+
   return {
     name: node.Name,
     ...(vatId ? { vatId } : {}),
+    ...(legalId ? { legalId } : {}),
+    // The scheme comes back as written, not as supplied: the serializer applies
+    // a default when none is given, so a party built with `legalId` alone
+    // returns carrying `legalScheme: '0002'`. The document is unchanged; the
+    // model is enriched with what the document actually says.
+    ...(legalScheme ? { legalScheme } : {}),
+    ...(globalId ? { globalId } : {}),
+    ...(globalScheme ? { globalScheme } : {}),
     address: postalAddress,
     ...(contact ? { contact } : {}),
   };
+}
+
+/** schemeID attribute of an identifier node, if it carries one. */
+function schemeOf(node: SchemedIdNode | undefined): string | undefined {
+  return typeof node === 'object' ? node['@_schemeID'] : undefined;
 }
 
 function parseTradeContact(node: ParsedTradeContact | undefined): TradeContact | undefined {

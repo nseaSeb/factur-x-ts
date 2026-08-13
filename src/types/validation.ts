@@ -16,11 +16,13 @@ export type ValidationErrorCode =
   // BR-CL-06: BT-8 restricted by EN 16931 to a subset of UNTDID 2475.
   | 'INVALID_VAT_POINT_DATE'
   | 'UNEMITTABLE_VAT_POINT_DATE'
-  // French reform (opt-in): G1.02, G1.60, S1.13.
+  // French reform (opt-in): G1.02, G1.60, S1.13, BT-30 / BT-47.
   | 'MISSING_BUSINESS_PROCESS'
   | 'INVALID_BUSINESS_PROCESS'
   | 'FORBIDDEN_TYPE_CODE_FOR_BUSINESS_PROCESS'
-  | 'INCONSISTENT_VAT_POINT_DATE';
+  | 'INCONSISTENT_VAT_POINT_DATE'
+  | 'MISSING_LEGAL_ID'
+  | 'INVALID_LEGAL_ID';
 
 export interface ValidationError {
   readonly code: ValidationErrorCode;
@@ -46,11 +48,15 @@ export interface ValidationOptions {
   readonly validateVatPointDate?: boolean;
 
   /**
-   * G1.02 / G1.60 / S1.13 — the French closed list for BT-23 and its cross-rules.
+   * The French reform rule set: the G1.02 closed list for BT-23 and its
+   * cross-rules G1.60 / S1.13, plus the mandatory SIREN identifiers
+   * BT-30 / BT-47.
    *
-   * **Off by default**: BT-23 values are not restricted by EN 16931, so applying
-   * the French list universally would lock out non-French callers and break
-   * round-tripping of any third-party document already carrying a BT-23.
+   * **Off by default**: none of these are EN 16931 restrictions. BT-23 values
+   * are unrestricted by the standard (Peppol and Chorus Pro use their own), and
+   * SIREN is meaningless outside France — applying either universally would
+   * lock out non-French callers and break round-tripping of third-party
+   * documents.
    */
-  readonly validateBusinessProcess?: boolean;
+  readonly validateFrenchRules?: boolean;
 }
