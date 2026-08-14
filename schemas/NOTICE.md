@@ -2,13 +2,15 @@
 
 The files under `schemas/` are **not** part of factur-x-ts's own code (which is
 MIT licensed — see `LICENSE` at the repository root). They are the official
-EN 16931 XSD schemas, redistributed so `validateXsd` works without downloading
-anything at runtime.
+EN 16931 XSD schemas and Schematron rule sets, redistributed so `validateXsd`
+and `validateSchematron` work without downloading anything at runtime.
 
 | Path | Files | Upstream |
 |---|---|---|
 | `schemas/xsd/en16931/` | `Factur-X_EN16931.xsd` + 3 imported UN/CEFACT schemas | Factur-X / EN 16931 standard, as packaged by [`akretion/factur-x`](https://github.com/akretion/factur-x) |
 | `schemas/xsd/extended/` | `Factur-X_EXTENDED.xsd` + 3 imported UN/CEFACT schemas | idem, EXTENDED profile |
+| `schemas/schematron/en16931/` | `Factur-X_1.09_EN16931.xsl`, `FACTUR-X_EN16931_codedb.xml` | idem |
+| `schemas/schematron/extended/` | `Factur-X_1.09_EXTENDED.xsl`, `FACTUR-X_EXTENDED_codedb.xml` | idem, EXTENDED profile |
 
 Both sets originate from the Factur-X standard published by **FNFE-MPE**, whose
 CII schemas are themselves derived from **UN/CEFACT** work. Copied verbatim
@@ -51,7 +53,9 @@ Reproduced verbatim from the UN/CEFACT `CrossIndustryInvoice` schema modules
 
 ## akretion/factur-x (packaging)
 
-Copyright (c) 2016-2023, Alexis de Lattre — **BSD-3-Clause**.
+Copyright (c) 2016-2023, Alexis de Lattre — **BSD-3-Clause**. The full licence
+text, including the list of conditions and the disclaimer its redistribution
+clause requires, is bundled verbatim as `schemas/schematron/LICENSE.akretion.txt`.
 
 ---
 

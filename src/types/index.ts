@@ -6,3 +6,4 @@ export * from './profiles.js';
 export * from './pdf.js';
 export * from './validation.js';
 export * from './xsd.js';
+export * from './schematron.js';

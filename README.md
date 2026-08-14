@@ -100,10 +100,12 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
 | `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled. |
+| `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED Schematron business rules, via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one). |
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
 | `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. |
+| `SchematronViolation`, `SchematronValidationResult` | Shapes returned by Schematron validation. |
 
 `generate` validates before it writes when `profile` is `'EN 16931'`. On failure it throws `FacturXGenerateError`, whose `validationErrors` array carries a `code`, the offending `field` path, and a message naming the business rule:
 
@@ -213,8 +215,7 @@ Known and unaddressed, from a review of the library:
 - Amount comparisons use a fixed 0.02 absolute tolerance, which is looser than the exact comparison strict validators apply.
 - Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
 - `xmlEscape` handles the five XML entities but does not strip C0 control characters.
-
-No Schematron validation runs in this library — only the business rules `validateEn16931` checks in-process, plus XSD structure via `validateXsd`. Validate against the official EN 16931 Schematron artefacts before sending invoices to a real recipient.
+- The serializer writes `currencyID` on `ram:*Amount` elements the EN 16931 Schematron rejects it on — found by running `validateSchematron` against the library's own sample invoice, which fails 12 of the ruleset's 22 "attribute not used in this context" checks (all `@currencyID`). This is a business-rule restriction, not an XSD one — `validateXsd` accepts the same XML, since the base `AmountType` leaves `currencyID` optional everywhere; the Schematron narrows that per element. It's a real restriction and not a false positive from `validateSchematron`'s own unflagged-is-error default: of ~1,242 assertions in the bundled ruleset, only 3 are ever marked `flag="warning"` (all unrelated), so the rule author's own convention treats these 22 `@currencyID` checks as blocking. Affects most document- and line-level amounts (`GrandTotalAmount`, `DuePayableAmount`, `TaxBasisTotalAmount`, line `LineTotalAmount`, allowance/charge amounts, tax breakdown's `CalculatedAmount`/`BasisAmount`…); only the header's `TaxTotalAmount` is unaffected. See `tests/e2e/schematron.test.ts`.
 
 ## XSD validation
 
@@ -239,6 +240,32 @@ The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifie
 
 `validateXsd` checks structure and cardinality — mandatory elements, types, sequence order — not business rules. It does not replace `validateEn16931`, nor a full Schematron run against the official rule set.
 
+## Schematron validation
+
+`validateSchematron` runs the official EN 16931 / EXTENDED Schematron business rules, bundled under `schemas/schematron/` (see `schemas/NOTICE.md`). The Schematron compiles to XSLT 2.0, which Node can't run in-process — like the Python [`akretion/factur-x`](https://github.com/akretion/factur-x) library, validation is delegated to a [Saxon server](https://github.com/willemvlh/saxon-server) over HTTP:
+
+```bash
+docker compose -f docker/compose.yml up -d --build
+```
+
+```ts
+import { validateSchematron } from 'factur-x-ts';
+
+const result = await validateSchematron(xml, { endpoint: 'http://localhost:5000/transform' });
+
+if (!result.valid) {
+  for (const e of result.errors) console.error(`${e.test}: ${e.message}`);
+}
+```
+
+The rule set is picked the same way as `validateXsd`: `options.profile`, or the XML's own guideline URN, falling back to `EN 16931`. Only `EN 16931` and `EXTENDED` ship a bundled rule set; pass `options.xsl` with a compiled Schematron XSLT for anything else (e.g. a national CTC rule set). `<!DOCTYPE>` is rejected the same way as `validateXsd`, before any network call.
+
+Findings are split by SVRL severity into `result.errors` and `result.warnings` — only `warning` and `info` are non-blocking, so `result.valid` is `errors.length === 0`. `PEPPOL-EN16931-R008` ("no empty elements") is flagged `warning` and fires on every invoice with no delivery data, since CII still requires an empty `ram:ApplicableHeaderTradeDelivery` — a `valid: true` result can still carry warnings worth inspecting.
+
+> Privacy: a public Saxon endpoint means sending real invoice data to a third party. Self-host in production — `docker/Dockerfile` bakes the EN 16931 / EXTENDED code-list DB into the image so validation stays entirely offline, and pins the upstream image by digest (a floating tag has broken this exact check before).
+
+The `docker/` files aren't published to npm — clone the repository to use them. The bundled Schematron XSL (`schemas/schematron/`, ~2.5MB for both profiles) *is* published unconditionally, alongside the XSD, so every install carries it whether or not `validateSchematron` is ever called.
+
 ## Development
 
 ```bash
@@ -250,6 +277,8 @@ npm run build       # tsc -> dist/
 ```
 
 The end-to-end suite checks PDF/A-3b conformance with [veraPDF](https://verapdf.org/) when the `verapdf` binary is on `PATH`; those tests skip with a warning when it is not, and the rest of the suite still verifies round-trip fidelity and attachment hygiene without it.
+
+Likewise, the Schematron e2e tests run only when `FACTURX_SAXON_URL` is set to a running Saxon server (`docker compose -f docker/compose.yml up -d --build`, then `FACTURX_SAXON_URL=http://localhost:5000/transform npm test`); they skip with a warning otherwise. macOS binds port 5000 to AirPlay Receiver by default, which answers with a plain HTTP 403 instead of a connection error — free the port or map another one (`docker compose -f docker/compose.yml run --rm -p 5055:5000 saxon`).
 
 ## Licence
 

@@ -31,10 +31,14 @@ export type {
   XsdValidationError,
   XsdValidationResult,
   XsdValidationOptions,
+  SchematronViolation,
+  SchematronValidationResult,
+  SchematronValidationOptions,
 } from './types/index.js';
 export { validateEn16931, VAT_POINT_DATE_CODES } from './profiles/en16931.js';
 export { BUSINESS_PROCESS_CODES } from './profiles/fr.js';
 export { validateXsd, FacturXXsdNotBundledError } from './validate/xsd.js';
+export { validateSchematron, FacturXSchematronNotBundledError } from './validate/schematron.js';
 
 export { parse, FacturXParseError } from './pdf/parser.js';
 export { generate, FacturXGenerateError } from './pdf/generator.js';
