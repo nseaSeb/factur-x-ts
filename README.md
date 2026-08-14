@@ -99,9 +99,11 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 | `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice. Throws `FacturXGenerateError`. |
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
+| `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled. |
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
-| `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 validation. |
+| `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
+| `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. |
 
 `generate` validates before it writes when `profile` is `'EN 16931'`. On failure it throws `FacturXGenerateError`, whose `validationErrors` array carries a `code`, the offending `field` path, and a message naming the business rule:
 
@@ -198,6 +200,8 @@ Declaring a non-zero `allowanceTotal` with no document-level allowance behind it
 
 Only `EN 16931` runs mandatory-rule validation before generating. The others serialize whatever you hand them.
 
+`EN 16931` and `EXTENDED` additionally ship a bundled XSD, checkable with [`validateXsd`](#xsd-validation); `BASIC`, `BASIC WL` and `MINIMUM` don't.
+
 ## Limitations
 
 Known and unaddressed, from a review of the library:
@@ -210,7 +214,30 @@ Known and unaddressed, from a review of the library:
 - Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
 - `xmlEscape` handles the five XML entities but does not strip C0 control characters.
 
-No Schematron or XSD validation runs in this library. Validate against the official EN 16931 artefacts before sending invoices to a real recipient.
+No Schematron validation runs in this library — only the business rules `validateEn16931` checks in-process, plus XSD structure via `validateXsd`. Validate against the official EN 16931 Schematron artefacts before sending invoices to a real recipient.
+
+## XSD validation
+
+`validateXsd` checks CII XML against the official EN 16931 / EXTENDED XSD, bundled under `schemas/xsd/` (see `schemas/NOTICE.md` for provenance and licensing). It uses [`xmllint-wasm`](https://github.com/noppa/xmllint-wasm) — libxml2 compiled to WebAssembly, in-process, no native build step and no external server — declared as an **optional peer dependency**: npm won't install it or warn about its absence unless you add it yourself, so callers who never validate don't carry the 860KB.
+
+```bash
+npm install xmllint-wasm
+```
+
+```ts
+import { validateXsd } from 'factur-x-ts';
+
+const { rawXml } = await parse(await readFile('invoice.pdf'));
+const result = await validateXsd(new TextDecoder().decode(rawXml));
+
+if (!result.valid) {
+  for (const e of result.errors) console.error(e.message);
+}
+```
+
+The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in the XML, falling back to `EN 16931`. Only `EN 16931` and `EXTENDED` ship a bundled schema; `validateXsd` throws `FacturXXsdNotBundledError` for the other three profiles rather than silently falling back. Input is treated as untrusted: a `<!DOCTYPE>` is rejected outright (XXE / entity-expansion risk), never handed to the validator.
+
+`validateXsd` checks structure and cardinality — mandatory elements, types, sequence order — not business rules. It does not replace `validateEn16931`, nor a full Schematron run against the official rule set.
 
 ## Development
 

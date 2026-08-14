@@ -12,14 +12,7 @@ import type {
   Note,
 } from '../types/invoice.js';
 import type { Profile } from '../types/profiles.js';
-
-const GUIDELINE_URN: Record<Profile, string> = {
-  MINIMUM: 'urn:factur-x.eu:1p0:minimum',
-  'BASIC WL': 'urn:factur-x.eu:1p0:basicwl',
-  BASIC: 'urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic',
-  'EN 16931': 'urn:cen.eu:en16931:2017',
-  EXTENDED: 'urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended',
-};
+import { GUIDELINE_URN } from '../types/profiles.js';
 
 export class FacturXSerializeError extends Error {
   constructor(message: string) {
