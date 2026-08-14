@@ -99,12 +99,12 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 | `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice. Throws `FacturXGenerateError`. |
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
-| `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled. |
-| `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED Schematron business rules, via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one). |
+| `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
+| `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED Schematron business rules, via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one), `FacturXProfileNotDetectedError` if the profile is omitted and can't be detected, `FacturXSaxonError` if the server is unreachable, answers non-2xx, or returns a body that isn't a real SVRL report. |
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
-| `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. |
+| `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. `XsdValidationError` carries xmllint-wasm's `rawMessage` and, when it could parse one out, `location: { fileName, lineNumber }` — both absent for factur-x-ts's own synthetic errors (e.g. the DOCTYPE rejection). |
 | `SchematronViolation`, `SchematronValidationResult` | Shapes returned by Schematron validation. |
 
 `generate` validates before it writes when `profile` is `'EN 16931'`. On failure it throws `FacturXGenerateError`, whose `validationErrors` array carries a `code`, the offending `field` path, and a message naming the business rule:
@@ -236,7 +236,7 @@ if (!result.valid) {
 }
 ```
 
-The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in the XML, falling back to `EN 16931`. Only `EN 16931` and `EXTENDED` ship a bundled schema; `validateXsd` throws `FacturXXsdNotBundledError` for the other three profiles rather than silently falling back. Input is treated as untrusted: a `<!DOCTYPE>` is rejected outright (XXE / entity-expansion risk), never handed to the validator.
+The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in the XML, falling back to `EN 16931` if neither resolves (malformed XML, an unrecognized guideline URN) — a deliberate exception to "never guess silently": EN 16931's XSD is a structural superset, so it's still a meaningful check on a document whose exact profile isn't known, which matters for the extract → parse → correct → generate flow over a third-party document. Only `EN 16931` and `EXTENDED` ship a bundled schema; `validateXsd` throws `FacturXXsdNotBundledError` for the other three profiles when the profile *is* known (explicitly or detected) — that case isn't guessed away. Input is treated as untrusted: a `<!DOCTYPE>` is rejected outright (XXE / entity-expansion risk), never handed to the validator — checked only in the document's prolog, so a free-text field that happens to contain the literal string `<!DOCTYPE` isn't a false positive.
 
 `validateXsd` checks structure and cardinality — mandatory elements, types, sequence order — not business rules. It does not replace `validateEn16931`, nor a full Schematron run against the official rule set.
 
@@ -258,11 +258,20 @@ if (!result.valid) {
 }
 ```
 
-The rule set is picked the same way as `validateXsd`: `options.profile`, or the XML's own guideline URN, falling back to `EN 16931`. Only `EN 16931` and `EXTENDED` ship a bundled rule set; pass `options.xsl` with a compiled Schematron XSLT for anything else (e.g. a national CTC rule set). `<!DOCTYPE>` is rejected the same way as `validateXsd`, before any network call.
+The rule set is picked the same way as `validateXsd`: `options.profile`, or the XML's own guideline URN — `FacturXProfileNotDetectedError` if neither resolves. Only `EN 16931` and `EXTENDED` ship a bundled rule set; pass `options.xsl` with a compiled Schematron XSLT for anything else (e.g. a national CTC rule set). `<!DOCTYPE>` is rejected the same way as `validateXsd`, before any network call. A response that isn't network-reachable, doesn't come back 2xx, or comes back 2xx with a body that isn't an actual SVRL report (a misconfigured endpoint, a Saxon fault page) throws `FacturXSaxonError` rather than being read as "no violations found" — a broken connection to Saxon must never look like a clean `valid: true`.
 
 Findings are split by SVRL severity into `result.errors` and `result.warnings` — only `warning` and `info` are non-blocking, so `result.valid` is `errors.length === 0`. `PEPPOL-EN16931-R008` ("no empty elements") is flagged `warning` and fires on every invoice with no delivery data, since CII still requires an empty `ram:ApplicableHeaderTradeDelivery` — a `valid: true` result can still carry warnings worth inspecting.
 
-> Privacy: a public Saxon endpoint means sending real invoice data to a third party. Self-host in production — `docker/Dockerfile` bakes the EN 16931 / EXTENDED code-list DB into the image so validation stays entirely offline, and pins the upstream image by digest (a floating tag has broken this exact check before).
+> Privacy: a public Saxon endpoint means sending real invoice data to a third party. Self-host in production — `docker/Dockerfile` bakes the EN 16931 / EXTENDED code-list DB into the image so validation stays entirely offline, **provided you also pass `codedbUrl`**: the XSLT resolves the code-list DB via `document(...)`, and without `codedbUrl` the default is a live, unpinned `raw.githubusercontent.com` URL — self-hosting Saxon alone doesn't stop that fetch.
+>
+> ```ts
+> await validateSchematron(xml, {
+>   endpoint: 'http://localhost:5000/transform',
+>   codedbUrl: 'file:///opt/facturx/FACTUR-X_EN16931_codedb.xml', // baked into docker/Dockerfile
+> });
+> ```
+>
+> The Docker image also pins the upstream Saxon image by digest, not by a floating tag (that exact substitution has broken this check before).
 
 The `docker/` files aren't published to npm — clone the repository to use them. The bundled Schematron XSL (`schemas/schematron/`, ~2.5MB for both profiles) *is* published unconditionally, alongside the XSD, so every install carries it whether or not `validateSchematron` is ever called.
 

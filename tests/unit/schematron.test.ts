@@ -4,6 +4,7 @@ import {
   parseSvrl,
   validateSchematron,
   FacturXSchematronNotBundledError,
+  FacturXSaxonError,
 } from '../../src/validate/schematron.js';
 import { sampleInvoice } from '../fixtures/invoice.js';
 
@@ -55,6 +56,14 @@ describe('parseSvrl', () => {
     );
     expect(violations[0]).not.toHaveProperty('flag');
   });
+
+  it('throws rather than silently returning no violations for a non-SVRL body', () => {
+    // A misconfigured endpoint, a Saxon fault page, or a plain-text error
+    // response would otherwise parse to "no failed-assert / successful-report
+    // found" and be read as a clean valid: true.
+    expect(() => parseSvrl('<html><body>502 Bad Gateway</body></html>')).toThrow(FacturXSaxonError);
+    expect(() => parseSvrl('')).toThrow(FacturXSaxonError);
+  });
 });
 
 describe('validateSchematron', () => {
@@ -68,5 +77,12 @@ describe('validateSchematron', () => {
     const result = await validateSchematron(xml, { endpoint: 'http://192.0.2.1/unreachable' });
     expect(result.valid).toBe(false);
     expect(result.errors[0]?.message).toMatch(/DOCTYPE/);
+  });
+
+  it('throws FacturXSaxonError, not a plain Error, when the server is unreachable', async () => {
+    const xml = serialize(sampleInvoice(), 'EN 16931');
+    await expect(
+      validateSchematron(xml, { endpoint: 'http://127.0.0.1:1/transform', timeoutMs: 2000 }),
+    ).rejects.toBeInstanceOf(FacturXSaxonError);
   });
 });

@@ -10,8 +10,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Profile } from '../types/profiles.js';
-import type { XsdValidationOptions, XsdValidationResult } from '../types/xsd.js';
-import { detectProfile } from '../xml/guideline.js';
+import type { XsdValidationError, XsdValidationOptions, XsdValidationResult } from '../types/xsd.js';
+import { hasDoctype, resolveProfile, stripBom } from './shared.js';
 
 export class FacturXXsdNotBundledError extends Error {
   constructor(profile: Profile) {
@@ -51,15 +51,6 @@ const SCHEMAS: Partial<Record<Profile, SchemaBundle>> = {
 
 const SCHEMA_DIR = new URL('../../schemas/xsd/', import.meta.url);
 
-// Input is untrusted: reject a DOCTYPE outright rather than rely on the
-// validator's own defaults, so the no-XXE / no-entity-expansion guarantee is
-// ours regardless of how xmllint-wasm is configured.
-const DOCTYPE_RE = /<!DOCTYPE/i;
-
-function stripBom(xml: string): string {
-  return xml.charCodeAt(0) === 0xfeff ? xml.slice(1) : xml;
-}
-
 function schemaFileName(relativePath: string): string {
   return relativePath.slice(relativePath.lastIndexOf('/') + 1);
 }
@@ -83,10 +74,18 @@ async function loadValidateXML(): Promise<typeof import('xmllint-wasm').validate
   try {
     const mod = await import('xmllint-wasm');
     return mod.validateXML;
-  } catch {
-    throw new Error(
-      'validateXsd requires the optional dependency "xmllint-wasm". Install it with `npm install xmllint-wasm`.',
-    );
+  } catch (error) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+      throw new Error(
+        'validateXsd requires the optional dependency "xmllint-wasm". Install it with `npm install xmllint-wasm`.',
+        { cause: error },
+      );
+    }
+    // Some other failure (WASM instantiation, a sandboxed worker_threads
+    // restriction, a corrupted install) — xmllint-wasm IS resolvable, so
+    // reporting "not installed" here would be actively misleading.
+    throw new Error('validateXsd failed to load "xmllint-wasm".', { cause: error });
   }
 }
 
@@ -95,8 +94,10 @@ async function loadValidateXML(): Promise<typeof import('xmllint-wasm').validate
  *
  * `options.profile` picks the schema; if omitted it is read from
  * `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in `xml`, falling
- * back to `'EN 16931'`. Throws `FacturXXsdNotBundledError` for a profile
- * whose XSD isn't bundled (`BASIC`, `BASIC WL`, `MINIMUM`).
+ * back to `'EN 16931'` (a structural superset, so it's still a meaningful
+ * check on a document from an unrecognized profile). Throws
+ * `FacturXXsdNotBundledError` for a profile whose XSD isn't bundled
+ * (`BASIC`, `BASIC WL`, `MINIMUM`).
  */
 export async function validateXsd(
   xml: string,
@@ -104,14 +105,14 @@ export async function validateXsd(
 ): Promise<XsdValidationResult> {
   const stripped = stripBom(xml);
 
-  if (DOCTYPE_RE.test(stripped)) {
+  if (hasDoctype(stripped)) {
     return {
       valid: false,
       errors: [{ message: 'DOCTYPE declarations are not allowed (XXE / entity-expansion risk).' }],
     };
   }
 
-  const profile = options.profile ?? detectProfile(stripped) ?? 'EN 16931';
+  const profile = resolveProfile(stripped, options.profile, 'EN 16931');
   const bundle = SCHEMAS[profile];
   if (bundle === undefined) {
     throw new FacturXXsdNotBundledError(profile);
@@ -131,6 +132,18 @@ export async function validateXsd(
 
   return {
     valid: result.valid,
-    errors: result.errors.map((error) => ({ message: error.message })),
+    errors: result.errors.map(xsdErrorOf),
+  };
+}
+
+function xsdErrorOf(error: {
+  readonly message: string;
+  readonly rawMessage: string;
+  readonly loc: { readonly fileName: string; readonly lineNumber: number } | null;
+}): XsdValidationError {
+  return {
+    message: error.message,
+    rawMessage: error.rawMessage,
+    ...(error.loc !== null ? { location: error.loc } : {}),
   };
 }

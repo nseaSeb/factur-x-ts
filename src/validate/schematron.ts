@@ -24,7 +24,7 @@ import type {
   SchematronValidationResult,
   SchematronViolation,
 } from '../types/schematron.js';
-import { detectProfile } from '../xml/guideline.js';
+import { hasDoctype, resolveProfile, stripBom } from './shared.js';
 
 export class FacturXSchematronNotBundledError extends Error {
   constructor(profile: Profile) {
@@ -32,6 +32,19 @@ export class FacturXSchematronNotBundledError extends Error {
       `No bundled Schematron for profile "${profile}". Only "EN 16931" and "EXTENDED" ship with factur-x-ts.`,
     );
     this.name = 'FacturXSchematronNotBundledError';
+  }
+}
+
+// Anything that stops us getting a real SVRL report back from Saxon: the
+// server unreachable, a non-2xx response, or a 200 OK body that isn't SVRL
+// (a misconfigured proxy, a Saxon fault page, an empty body). Distinct from
+// FacturXSchematronNotBundledError so callers can tell "this profile has no
+// rule set" apart from "the validation infrastructure failed" — the latter
+// must never be swallowed into a silent valid:true.
+export class FacturXSaxonError extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = 'FacturXSaxonError';
   }
 }
 
@@ -69,19 +82,46 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 // since CII still requires an empty ram:ApplicableHeaderTradeDelivery.
 const WARNING_FLAGS = new Set(['warning', 'info']);
 
-// Input is untrusted: reject a DOCTYPE outright, same as validateXsd.
-const DOCTYPE_RE = /<!DOCTYPE/i;
-
-function stripBom(xml: string): string {
-  return xml.charCodeAt(0) === 0xfeff ? xml.slice(1) : xml;
-}
+// The XSL is 640KB-1.8MB and rewriting the codedb URL into it is an O(file
+// size) copy; cache the resolved text per (bundle, codedbUrl) so validating
+// many invoices in a row doesn't re-read and re-rewrite it every call. Small,
+// bounded key space (2 bundles, each keyed by whatever distinct codedbUrl
+// values a process actually uses), so an unbounded nested Map is fine —
+// nothing to evict.
+const xslCache = new Map<string, Map<string, Promise<string>>>();
 
 async function loadXsl(bundle: SchematronBundle, codedbUrl: string | undefined): Promise<string> {
-  const path = fileURLToPath(new URL(bundle.xsl, SCHEMATRON_DIR));
-  const xsl = await readFile(path, 'utf-8');
-  // The XSLT resolves the code-list DB via document('<filename>'); point it at
-  // a URL the Saxon server can fetch (matches the Python reference library).
-  return xsl.split(bundle.codedbFile).join(codedbUrl ?? bundle.defaultCodedbUrl);
+  const resolvedCodedbUrl = codedbUrl ?? bundle.defaultCodedbUrl;
+
+  let byCodedbUrl = xslCache.get(bundle.xsl);
+  if (byCodedbUrl === undefined) {
+    byCodedbUrl = new Map();
+    xslCache.set(bundle.xsl, byCodedbUrl);
+  }
+
+  const cached = byCodedbUrl.get(resolvedCodedbUrl);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const cacheForThisBundle = byCodedbUrl;
+  const promise = (async () => {
+    const path = fileURLToPath(new URL(bundle.xsl, SCHEMATRON_DIR));
+    const xsl = await readFile(path, 'utf-8');
+    // The XSLT resolves the code-list DB via document('<filename>'); point it
+    // at a URL the Saxon server can fetch (matches the Python reference
+    // library). Passing codedbUrl: 'file:///opt/facturx/...' (the path baked
+    // into docker/Dockerfile) is what actually keeps validation offline —
+    // the default above is a live, unpinned GitHub URL.
+    return xsl.split(bundle.codedbFile).join(resolvedCodedbUrl);
+  })().catch((error: unknown) => {
+    // Don't cache a failure (e.g. a transient read error) forever.
+    cacheForThisBundle.delete(resolvedCodedbUrl);
+    throw error;
+  });
+
+  byCodedbUrl.set(resolvedCodedbUrl, promise);
+  return promise;
 }
 
 async function resolveXsl(xml: string, options: SchematronValidationOptions): Promise<string> {
@@ -89,7 +129,10 @@ async function resolveXsl(xml: string, options: SchematronValidationOptions): Pr
     return options.xsl;
   }
 
-  const profile = options.profile ?? detectProfile(xml) ?? 'EN 16931';
+  // No fallback profile here (unlike validateXsd): a wrong guess produces a
+  // misleading pass/fail against the wrong profile's business rules, so an
+  // undetectable profile must throw rather than silently pick EN 16931.
+  const profile = resolveProfile(xml, options.profile);
   const bundle = SCHEMATRON[profile];
   if (bundle === undefined) {
     throw new FacturXSchematronNotBundledError(profile);
@@ -117,11 +160,11 @@ async function postToSaxon(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Saxon server unreachable at ${endpoint}: ${message}`, { cause: error });
+    throw new FacturXSaxonError(`Saxon server unreachable at ${endpoint}: ${message}`, { cause: error });
   }
 
   if (!response.ok) {
-    throw new Error(`Saxon server returned HTTP ${response.status} for ${endpoint}`);
+    throw new FacturXSaxonError(`Saxon server returned HTTP ${response.status} for ${endpoint}`);
   }
 
   return response.text();
@@ -178,9 +221,18 @@ export function parseSvrl(svrl: string): SchematronViolation[] {
 
   const parsed = parser.parse(svrl) as ParsedSvrl;
   const output = parsed['schematron-output'];
+  if (output === undefined) {
+    // A 200 OK body that isn't actually an SVRL report (a misconfigured
+    // endpoint, a Saxon fault page, an empty body) must not read as "zero
+    // violations found" — that would silently report valid: true for a
+    // document that was never actually checked.
+    throw new FacturXSaxonError(
+      'Saxon server response is not an SVRL report (missing schematron-output root element).',
+    );
+  }
   return [
-    ...asFindingArray(output?.['failed-assert']),
-    ...asFindingArray(output?.['successful-report']),
+    ...asFindingArray(output['failed-assert']),
+    ...asFindingArray(output['successful-report']),
   ].map(violationOf);
 }
 
@@ -190,7 +242,9 @@ export function parseSvrl(svrl: string): SchematronViolation[] {
  *
  * Throws `FacturXSchematronNotBundledError` for a profile whose Schematron
  * isn't bundled (`BASIC`, `BASIC WL`, `MINIMUM`) unless `options.xsl` supplies
- * one directly.
+ * one directly, `FacturXProfileNotDetectedError` if the profile is omitted
+ * and can't be detected, and `FacturXSaxonError` for anything that stops a
+ * real SVRL report coming back from Saxon.
  */
 export async function validateSchematron(
   xml: string,
@@ -198,7 +252,7 @@ export async function validateSchematron(
 ): Promise<SchematronValidationResult> {
   const stripped = stripBom(xml);
 
-  if (DOCTYPE_RE.test(stripped)) {
+  if (hasDoctype(stripped)) {
     return {
       valid: false,
       errors: [{ message: 'DOCTYPE declarations are not allowed (XXE / entity-expansion risk).' }],
