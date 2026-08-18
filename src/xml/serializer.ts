@@ -79,7 +79,7 @@ function buildNote(note: Note): string {
 // ---- SupplyChainTradeTransaction ----
 
 function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: string): string {
-  const lineItems = invoice.lines.map((line) => buildLineItem(line, currency)).join('');
+  const lineItems = invoice.lines.map((line) => buildLineItem(line)).join('');
 
   return (
     `<rsm:SupplyChainTradeTransaction>` +
@@ -93,26 +93,26 @@ function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: str
 
 // ---- Line items ----
 
-function buildLineItem(line: LineItem, currency: string): string {
+function buildLineItem(line: LineItem): string {
   const priceDiscount =
     line.grossPrice !== undefined && line.priceDiscount !== undefined
       ? `<ram:AppliedTradeAllowanceCharge>` +
         `<ram:ChargeIndicator>${elIndicator(false)}</ram:ChargeIndicator>` +
-        elAmount('ram:ActualAmount', line.priceDiscount, currency) +
+        elAmount('ram:ActualAmount', line.priceDiscount) +
         `</ram:AppliedTradeAllowanceCharge>`
       : '';
 
   const grossPrice =
     line.grossPrice !== undefined
       ? `<ram:GrossPriceProductTradePrice>` +
-        elAmount('ram:ChargeAmount', line.grossPrice, currency) +
+        elAmount('ram:ChargeAmount', line.grossPrice) +
         priceDiscount +
         `</ram:GrossPriceProductTradePrice>`
       : '';
 
   const settlementAllowancesCharges = [
-    ...(line.allowances ?? []).map((ac) => buildTradeAllowanceCharge(ac, false, currency)),
-    ...(line.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true, currency)),
+    ...(line.allowances ?? []).map((ac) => buildTradeAllowanceCharge(ac, false)),
+    ...(line.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true)),
   ].join('');
 
   const description = line.description ? el('ram:Description', line.description) : '';
@@ -123,7 +123,7 @@ function buildLineItem(line: LineItem, currency: string): string {
     `<ram:SpecifiedTradeProduct>${el('ram:Name', line.name)}${description}</ram:SpecifiedTradeProduct>` +
     `<ram:SpecifiedLineTradeAgreement>` +
     grossPrice +
-    `<ram:NetPriceProductTradePrice>${elAmount('ram:ChargeAmount', line.netPrice, currency)}</ram:NetPriceProductTradePrice>` +
+    `<ram:NetPriceProductTradePrice>${elAmount('ram:ChargeAmount', line.netPrice)}</ram:NetPriceProductTradePrice>` +
     `</ram:SpecifiedLineTradeAgreement>` +
     `<ram:SpecifiedLineTradeDelivery>` +
     `<ram:BilledQuantity unitCode="${xmlEscape(line.unit)}">${formatQuantity(line.quantity)}</ram:BilledQuantity>` +
@@ -136,16 +136,16 @@ function buildLineItem(line: LineItem, currency: string): string {
     `</ram:ApplicableTradeTax>` +
     settlementAllowancesCharges +
     `<ram:SpecifiedTradeSettlementLineMonetarySummation>` +
-    elAmount('ram:LineTotalAmount', line.lineTotal, currency) +
+    elAmount('ram:LineTotalAmount', line.lineTotal) +
     `</ram:SpecifiedTradeSettlementLineMonetarySummation>` +
     `</ram:SpecifiedLineTradeSettlement>` +
     `</ram:IncludedSupplyChainTradeLineItem>`
   );
 }
 
-function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean, currency: string): string {
+function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean): string {
   const calculationPercent = ac.percent !== undefined ? el('ram:CalculationPercent', formatAmount(ac.percent)) : '';
-  const basisAmount = ac.basisAmount !== undefined ? elAmount('ram:BasisAmount', ac.basisAmount, currency) : '';
+  const basisAmount = ac.basisAmount !== undefined ? elAmount('ram:BasisAmount', ac.basisAmount) : '';
   const reasonCode = ac.reasonCode ? el('ram:ReasonCode', ac.reasonCode) : '';
   const reason = ac.reason ? el('ram:Reason', ac.reason) : '';
 
@@ -154,7 +154,7 @@ function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean, curre
     `<ram:ChargeIndicator>${elIndicator(isCharge)}</ram:ChargeIndicator>` +
     calculationPercent +
     basisAmount +
-    elAmount('ram:ActualAmount', ac.amount, currency) +
+    elAmount('ram:ActualAmount', ac.amount) +
     reasonCode +
     reason +
     `<ram:CategoryTradeTax>` +
@@ -239,7 +239,7 @@ function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: s
 function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency: string): string {
   const paymentMeans = (invoice.paymentMeans ?? []).map(buildPaymentMeans).join('');
   const taxes = invoice.taxBreakdown
-    .map((tb) => buildTradeTax(tb, currency, invoice.taxDueDateTypeCode))
+    .map((tb) => buildTradeTax(tb, invoice.taxDueDateTypeCode))
     .join('');
   const billingPeriod = invoice.billingPeriod
     ? `<ram:BillingSpecifiedPeriod>` +
@@ -252,8 +252,8 @@ function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency:
   // Document-level allowances/charges (BG-20/BG-21) — the groups BT-107 and
   // BT-108 in the monetary summation below are the totals of.
   const allowancesCharges = [
-    ...(invoice.allowances ?? []).map((ac) => buildTradeAllowanceCharge(ac, false, currency)),
-    ...(invoice.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true, currency)),
+    ...(invoice.allowances ?? []).map((ac) => buildTradeAllowanceCharge(ac, false)),
+    ...(invoice.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true)),
   ].join('');
 
   return (
@@ -306,7 +306,7 @@ function buildPaymentMeans(pm: PaymentMean): string {
   );
 }
 
-function buildTradeTax(tb: TaxBreakdown, currency: string, invoiceTaxDueDateTypeCode: string | undefined): string {
+function buildTradeTax(tb: TaxBreakdown, invoiceTaxDueDateTypeCode: string | undefined): string {
   const exemptionReason = tb.exemptionReason ? el('ram:ExemptionReason', tb.exemptionReason) : '';
   const exemptionReasonCode = tb.exemptionReasonCode ? el('ram:ExemptionReasonCode', tb.exemptionReasonCode) : '';
   // Per-breakdown value overrides the invoice-wide French mandate default (BT-8).
@@ -315,10 +315,10 @@ function buildTradeTax(tb: TaxBreakdown, currency: string, invoiceTaxDueDateType
 
   return (
     `<ram:ApplicableTradeTax>` +
-    elAmount('ram:CalculatedAmount', tb.calculatedAmount, currency) +
+    elAmount('ram:CalculatedAmount', tb.calculatedAmount) +
     el('ram:TypeCode', 'VAT') +
     exemptionReason +
-    elAmount('ram:BasisAmount', tb.basisAmount, currency) +
+    elAmount('ram:BasisAmount', tb.basisAmount) +
     el('ram:CategoryCode', tb.category) +
     exemptionReasonCode +
     dueDateTypeCodeEl +
@@ -328,21 +328,26 @@ function buildTradeTax(tb: TaxBreakdown, currency: string, invoiceTaxDueDateType
 }
 
 function buildMonetarySummation(totals: FacturXInvoice['totals'], currency: string): string {
-  const chargeTotal = totals.chargeTotal !== undefined ? elAmount('ram:ChargeTotalAmount', totals.chargeTotal, currency) : '';
+  const chargeTotal = totals.chargeTotal !== undefined ? elAmount('ram:ChargeTotalAmount', totals.chargeTotal) : '';
   const allowanceTotal =
-    totals.allowanceTotal !== undefined ? elAmount('ram:AllowanceTotalAmount', totals.allowanceTotal, currency) : '';
-  const prepaid = totals.prepaid !== undefined ? elAmount('ram:TotalPrepaidAmount', totals.prepaid, currency) : '';
+    totals.allowanceTotal !== undefined ? elAmount('ram:AllowanceTotalAmount', totals.allowanceTotal) : '';
+  const prepaid = totals.prepaid !== undefined ? elAmount('ram:TotalPrepaidAmount', totals.prepaid) : '';
 
   return (
     `<ram:SpecifiedTradeSettlementHeaderMonetarySummation>` +
-    elAmount('ram:LineTotalAmount', totals.lineTotal, currency) +
+    elAmount('ram:LineTotalAmount', totals.lineTotal) +
     chargeTotal +
     allowanceTotal +
-    elAmount('ram:TaxBasisTotalAmount', totals.taxBasisTotal, currency) +
-    elAmount('ram:TaxTotalAmount', totals.taxTotal, currency) +
-    elAmount('ram:GrandTotalAmount', totals.grandTotal, currency) +
+    elAmount('ram:TaxBasisTotalAmount', totals.taxBasisTotal) +
+    // EN 16931's Schematron permits currencyID on exactly this one amount
+    // (to disambiguate a VAT total expressed in a second, accounting
+    // currency — BT-111); everywhere else it's a violation ("attribute not
+    // used in the given context"). This library has no separate tax
+    // currency, so the invoice's own currency always satisfies that rule.
+    elAmountWithCurrency('ram:TaxTotalAmount', totals.taxTotal, currency) +
+    elAmount('ram:GrandTotalAmount', totals.grandTotal) +
     prepaid +
-    elAmount('ram:DuePayableAmount', totals.duePayable, currency) +
+    elAmount('ram:DuePayableAmount', totals.duePayable) +
     `</ram:SpecifiedTradeSettlementHeaderMonetarySummation>`
   );
 }
@@ -360,7 +365,11 @@ function el(tag: string, text: string): string {
   return `<${tag}>${xmlEscape(text)}</${tag}>`;
 }
 
-function elAmount(tag: string, value: number, currency: string): string {
+function elAmount(tag: string, value: number): string {
+  return `<${tag}>${formatAmount(value)}</${tag}>`;
+}
+
+function elAmountWithCurrency(tag: string, value: number, currency: string): string {
   return `<${tag} currencyID="${xmlEscape(currency)}">${formatAmount(value)}</${tag}>`;
 }
 

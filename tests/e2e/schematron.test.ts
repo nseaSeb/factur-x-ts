@@ -16,20 +16,35 @@ describe('validateSchematron against a live Saxon server', () => {
   const SAXON_TIMEOUT_MS = 60_000;
 
   it.runIf(SAXON_URL !== undefined)(
-    'flags the known @currencyID defect on an otherwise well-formed EN 16931 invoice',
+    'accepts a well-formed EN 16931 invoice',
     async () => {
-      // KNOWN DEFECT (see README § Limitations): the serializer writes
-      // currencyID on ram:*Amount elements the EN 16931 Schematron rejects it
-      // on — a business-rule restriction, not an XSD one (validateXsd accepts
-      // the same XML). This pins the current, wrong-but-understood behaviour
-      // rather than asserting valid: true, which would be false. Fixing the
-      // serializer should turn this into a plain "accepts a well-formed
-      // invoice" test.
+      // Previously failed here: the serializer wrote currencyID on
+      // ram:*Amount elements the EN 16931 Schematron rejects it on (fixed —
+      // see elAmount / elAmountWithCurrency in src/xml/serializer.ts).
       const xml = serialize(sampleInvoice(), 'EN 16931');
       const result = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
-      expect(result.valid).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors.every((e) => e.test === '@currencyID')).toBe(true);
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    },
+    SAXON_TIMEOUT_MS,
+  );
+
+  it.runIf(SAXON_URL !== undefined)(
+    'has no @currencyID violations against the EXTENDED Schematron',
+    async () => {
+      // The EXTENDED ruleset is a separate, larger XSL (44 @currencyID "not
+      // used" contexts vs EN 16931's 22) — bundled but, before this test,
+      // never actually run. Confirms the currencyID fix (verified against
+      // EN 16931 above) holds there too.
+      //
+      // Not asserting valid: true / errors: [] here: EXTENDED's Schematron
+      // also enforces BR-CO-25 (payment due date or terms required when the
+      // amount due is positive), which the library doesn't support at all
+      // (no BT-9/BT-20 mapping) — a real, separate, pre-existing gap outside
+      // this fix's scope. See README § Limitations.
+      const xml = serialize(sampleInvoice(), 'EXTENDED');
+      const result = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
+      expect(result.errors.some((e) => e.test?.includes('currencyID'))).toBe(false);
     },
     SAXON_TIMEOUT_MS,
   );

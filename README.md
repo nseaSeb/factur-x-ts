@@ -190,6 +190,10 @@ Two levels exist and they are not interchangeable:
 
 Declaring a non-zero `allowanceTotal` with no document-level allowance behind it is rejected at validation, because a receiver's Schematron rejects it too (BR-CO-11).
 
+## Amounts don't carry a currency, except one
+
+Every `ram:*Amount` element is serialized without `currencyID` — the invoice's single `currency` is implicit throughout, and the EN 16931 / EXTENDED Schematron rejects the attribute wherever it's redundant ("attribute not used in the given context"). The lone exception is `ram:TaxTotalAmount` (BT-110), which always carries `currencyID` set to that same `currency`: the Schematron's rule for this one element is conditional rather than a flat rejection, and permits `currencyID` when it matches `InvoiceCurrencyCode` — presumably to disambiguate it from an optional second VAT total in a separate accounting currency (BT-111, unsupported here — there's exactly one `currency` per invoice).
+
 ## Profiles
 
 | Profile | Status |
@@ -214,8 +218,8 @@ Known and unaddressed, from a review of the library:
 - BR-CO-17 (`calculatedAmount ≈ basisAmount × rate / 100`) is not enforced, and line-level allowances are never reconciled against the line total.
 - Amount comparisons use a fixed 0.02 absolute tolerance, which is looser than the exact comparison strict validators apply.
 - Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
+- No mapping exists for BT-9 (payment due date) or BT-20 (payment terms description); `SpecifiedTradePaymentTerms` is never serialized. Found by running `validateSchematron` against the EXTENDED profile: BR-CO-25 requires one of the two whenever `duePayable` is positive, and the library's own sample invoice fails it.
 - `xmlEscape` handles the five XML entities but does not strip C0 control characters.
-- The serializer writes `currencyID` on `ram:*Amount` elements the EN 16931 Schematron rejects it on — found by running `validateSchematron` against the library's own sample invoice, which fails 12 of the ruleset's 22 "attribute not used in this context" checks (all `@currencyID`). This is a business-rule restriction, not an XSD one — `validateXsd` accepts the same XML, since the base `AmountType` leaves `currencyID` optional everywhere; the Schematron narrows that per element. It's a real restriction and not a false positive from `validateSchematron`'s own unflagged-is-error default: of ~1,242 assertions in the bundled ruleset, only 3 are ever marked `flag="warning"` (all unrelated), so the rule author's own convention treats these 22 `@currencyID` checks as blocking. Affects most document- and line-level amounts (`GrandTotalAmount`, `DuePayableAmount`, `TaxBasisTotalAmount`, line `LineTotalAmount`, allowance/charge amounts, tax breakdown's `CalculatedAmount`/`BasisAmount`…); only the header's `TaxTotalAmount` is unaffected. See `tests/e2e/schematron.test.ts`.
 
 ## XSD validation
 

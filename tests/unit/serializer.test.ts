@@ -18,10 +18,22 @@ describe('serialize', () => {
     expect(xml).toContain('<udt:DateTimeString format="102">20260809</udt:DateTimeString>');
   });
 
-  it('formats amounts with exactly 2 decimals and a currencyID', () => {
+  it('formats amounts with exactly 2 decimals', () => {
     const xml = serialize(sampleInvoice(), 'EN 16931');
-    expect(xml).toContain('<ram:GrandTotalAmount currencyID="EUR">234.00</ram:GrandTotalAmount>');
+    expect(xml).toContain('<ram:GrandTotalAmount>234.00</ram:GrandTotalAmount>');
     expect(xml).not.toMatch(/\d+e[+-]\d+/i);
+  });
+
+  it('carries currencyID only on ram:TaxTotalAmount, matching InvoiceCurrencyCode', () => {
+    // The EN 16931 Schematron rejects @currencyID on every other ram:*Amount
+    // element ("attribute not used in the given context") — it's implicitly
+    // InvoiceCurrencyCode everywhere else. TaxTotalAmount alone is permitted
+    // (and required) to carry it, to disambiguate a VAT total optionally
+    // expressed in a second, accounting currency (BT-111) — which this
+    // library doesn't support, so it always equals the invoice currency.
+    const xml = serialize(sampleInvoice(), 'EN 16931');
+    expect(xml).toContain('<ram:TaxTotalAmount currencyID="EUR">39.00</ram:TaxTotalAmount>');
+    expect(xml.match(/currencyID="[^"]*"/g)).toEqual(['currencyID="EUR"']);
   });
 
   it('escapes special XML characters', () => {
@@ -33,7 +45,7 @@ describe('serialize', () => {
   it('emits document-level allowances as a BG-20 group backing BT-107', () => {
     const xml = serialize(sampleInvoice(), 'EN 16931');
 
-    expect(xml).toContain('<ram:AllowanceTotalAmount currencyID="EUR">5.00</ram:AllowanceTotalAmount>');
+    expect(xml).toContain('<ram:AllowanceTotalAmount>5.00</ram:AllowanceTotalAmount>');
     expect(xml).toContain('<ram:Reason>Remise fidélité</ram:Reason>');
     // The group must sit between BillingSpecifiedPeriod and the monetary
     // summation; nothing here validates against an XSD, so assert the order.
