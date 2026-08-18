@@ -169,12 +169,18 @@ interface ParsedReferencedDocument {
   readonly FormattedIssueDateTime?: ParsedDateTime;
 }
 
+interface ParsedPaymentTerms {
+  readonly Description?: string;
+  readonly DueDateDateTime?: ParsedDateTime;
+}
+
 interface ParsedHeaderTradeSettlement {
   readonly InvoiceCurrencyCode?: string;
   readonly SpecifiedTradeSettlementPaymentMeans?: readonly ParsedPaymentMeans[];
   readonly ApplicableTradeTax?: readonly ParsedTradeTax[];
   readonly BillingSpecifiedPeriod?: ParsedBillingPeriod;
   readonly SpecifiedTradeAllowanceCharge?: readonly ParsedAllowanceCharge[];
+  readonly SpecifiedTradePaymentTerms?: ParsedPaymentTerms;
   readonly SpecifiedTradeSettlementHeaderMonetarySummation?: ParsedMonetarySummation;
   readonly InvoiceReferencedDocument?: readonly ParsedReferencedDocument[];
 }
@@ -268,6 +274,8 @@ export function deserialize(xml: string): FacturXInvoice {
   const billingPeriod = settlement.BillingSpecifiedPeriod
     ? parseBillingPeriod(settlement.BillingSpecifiedPeriod)
     : undefined;
+  const paymentTerms = settlement.SpecifiedTradePaymentTerms?.Description;
+  const paymentDueDateText = textOf(settlement.SpecifiedTradePaymentTerms?.DueDateDateTime?.DateTimeString);
 
   // Document-level BG-20/BG-21, split on the same ChargeIndicator predicate the
   // line-level groups use.
@@ -296,6 +304,8 @@ export function deserialize(xml: string): FacturXInvoice {
     ...(precedingInvoices.length > 0 ? { precedingInvoices } : {}),
     ...(businessProcess ? { businessProcess } : {}),
     ...(taxDueDateTypeCode !== undefined ? { taxDueDateTypeCode } : {}),
+    ...(paymentTerms ? { paymentTerms } : {}),
+    ...(paymentDueDateText !== undefined ? { paymentDueDate: parseDate102(paymentDueDateText) } : {}),
   };
 }
 
@@ -432,14 +442,14 @@ function parseLineItem(node: ParsedLineItem): LineItem {
     id,
     name,
     ...(description ? { description } : {}),
-    quantity: Number(quantityText),
+    quantity: requireNumber(quantityText, `line ${id} BilledQuantity`),
     unit,
     netPrice: requireAmount(netPriceNode, `line ${id} NetPriceProductTradePrice`),
     ...(grossPrice !== undefined ? { grossPrice } : {}),
     ...(priceDiscount !== undefined ? { priceDiscount } : {}),
     lineTotal: requireAmount(lineTotalNode, `line ${id} LineTotalAmount`),
     vatCategory: asVatCategoryCode(tax.CategoryCode),
-    vatRate: Number(tax.RateApplicablePercent),
+    vatRate: requireNumber(tax.RateApplicablePercent, `line ${id} RateApplicablePercent`),
     ...(allowances.length > 0 ? { allowances } : {}),
     ...(charges.length > 0 ? { charges } : {}),
   };
@@ -457,7 +467,7 @@ function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge {
   }
 
   const basisAmount = parseOptionalAmount(node.BasisAmount);
-  const percent = node.CalculationPercent !== undefined ? Number(node.CalculationPercent) : undefined;
+  const percent = node.CalculationPercent !== undefined ? requireNumber(node.CalculationPercent, 'allowance/charge CalculationPercent') : undefined;
 
   return {
     amount: requireAmount(node.ActualAmount, 'allowance/charge ActualAmount'),
@@ -466,7 +476,7 @@ function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge {
     ...(basisAmount !== undefined ? { basisAmount } : {}),
     ...(percent !== undefined ? { percent } : {}),
     vatCategory: asVatCategoryCode(category.CategoryCode),
-    vatRate: Number(category.RateApplicablePercent),
+    vatRate: requireNumber(category.RateApplicablePercent, 'allowance/charge CategoryTradeTax RateApplicablePercent'),
   };
 }
 
@@ -481,7 +491,7 @@ function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown {
   return {
     type: 'VAT',
     category: asVatCategoryCode(node.CategoryCode),
-    rate: Number(node.RateApplicablePercent),
+    rate: requireNumber(node.RateApplicablePercent, 'tax breakdown RateApplicablePercent'),
     basisAmount: requireAmount(node.BasisAmount, 'tax breakdown BasisAmount'),
     calculatedAmount: requireAmount(node.CalculatedAmount, 'tax breakdown CalculatedAmount'),
     ...(node.ExemptionReason ? { exemptionReason: node.ExemptionReason } : {}),
@@ -571,6 +581,16 @@ function textOf(node: string | TextNode | undefined): string | undefined {
   if (node === undefined) return undefined;
   if (typeof node === 'string') return node;
   return node['#text'];
+}
+
+function requireNumber(text: string, field: string): number {
+  const value = Number(text);
+  // A continental "1,5" or any other non-numeric text silently becomes NaN
+  // via Number() — must fail loudly here rather than propagate a NaN into
+  // the model (e.g. a NaN vatRate, invisible until a downstream computation
+  // that reads it also turns to NaN).
+  if (Number.isNaN(value)) throw new FacturXDeserializeError(`Invalid numeric value for ${field}: "${text}"`);
+  return value;
 }
 
 function requireAmount(node: AmountNode, field: string): number {

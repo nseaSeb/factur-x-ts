@@ -60,6 +60,45 @@ describe('serialize', () => {
     expect(serialize(sampleInvoice(), 'BASIC WL')).toContain('urn:factur-x.eu:1p0:basicwl');
     expect(serialize(sampleInvoice(), 'EXTENDED')).toContain('urn:factur-x.eu:1p0:extended');
   });
+
+  it('strips C0 control characters instead of passing them through', () => {
+    // XML 1.0 only permits Tab/LF/CR among the C0 controls — anything else in
+    // free text (a copy-pasted form-feed, a stray NUL) is not valid character
+    // data even escaped, so it must be dropped rather than break well-formedness.
+    const base = sampleInvoice();
+    const invoice = { ...base, lines: [{ ...base.lines[0]!, name: 'Bad\x00Name\x0Bwith\x1Fcontrols' }] };
+
+    const xml = serialize(invoice, 'EN 16931');
+    expect(xml).toContain('<ram:Name>BadNamewithcontrols</ram:Name>');
+  });
+
+  it('emits ram:SpecifiedTradePaymentTerms between the allowance/charge group and the monetary summation', () => {
+    const invoice = { ...sampleInvoice(), paymentTerms: '30 jours net' };
+    const xml = serialize(invoice, 'EN 16931');
+
+    expect(xml).toContain('<ram:SpecifiedTradePaymentTerms><ram:Description>30 jours net</ram:Description></ram:SpecifiedTradePaymentTerms>');
+    const settlement = xml.slice(xml.indexOf('<ram:ApplicableHeaderTradeSettlement>'));
+    expect(settlement.indexOf('<ram:SpecifiedTradeAllowanceCharge>')).toBeLessThan(
+      settlement.indexOf('<ram:SpecifiedTradePaymentTerms>'),
+    );
+    expect(settlement.indexOf('<ram:SpecifiedTradePaymentTerms>')).toBeLessThan(
+      settlement.indexOf('<ram:SpecifiedTradeSettlementHeaderMonetarySummation>'),
+    );
+  });
+
+  it('omits ram:SpecifiedTradePaymentTerms when neither BT-9 nor BT-20 is given', () => {
+    const invoice = { ...sampleInvoice(), paymentTerms: undefined };
+    expect(serialize(invoice, 'EN 16931')).not.toContain('SpecifiedTradePaymentTerms');
+  });
+
+  it('omits ram:SpecifiedTradePaymentTerms for an empty-string paymentTerms too', () => {
+    // A childless <ram:SpecifiedTradePaymentTerms/> would satisfy neither
+    // ram:Description nor ram:DueDateDateTime, which is what BR-CO-25's own
+    // XPath looks for — so an empty string must behave like "absent", not
+    // like a present-but-blank value.
+    const invoice = { ...sampleInvoice(), paymentTerms: '' };
+    expect(serialize(invoice, 'EN 16931')).not.toContain('SpecifiedTradePaymentTerms');
+  });
 });
 
 describe('serialize + deserialize round-trip', () => {
@@ -246,5 +285,17 @@ describe('serialize + deserialize round-trip', () => {
 
     const roundTripped = deserialize(serialize(minimal, 'EN 16931'));
     expect(roundTripped).toEqual(minimal);
+  });
+
+  it('round-trips BT-9 (paymentDueDate) and BT-20 (paymentTerms) together', () => {
+    const invoice = {
+      ...sampleInvoice(),
+      paymentTerms: '30 jours net',
+      paymentDueDate: new Date(Date.UTC(2026, 8, 8)),
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+    expect(roundTripped.paymentTerms).toBe('30 jours net');
+    expect(roundTripped.paymentDueDate).toEqual(new Date(Date.UTC(2026, 8, 8)));
   });
 });

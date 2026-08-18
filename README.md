@@ -190,6 +190,12 @@ Two levels exist and they are not interchangeable:
 
 Declaring a non-zero `allowanceTotal` with no document-level allowance behind it is rejected at validation, because a receiver's Schematron rejects it too (BR-CO-11).
 
+Line-level allowances/charges are also checked arithmetically: `line.lineTotal` must equal `line.netPrice × line.quantity`, adjusted by that line's own `allowances`/`charges` — `validateEn16931` rejects a line where it doesn't (no dedicated EN 16931 rule number covers this specifically, unlike the header sums below).
+
+## Payment terms (BT-9 / BT-20)
+
+`paymentDueDate` (BT-9) and `paymentTerms` (BT-20, free text) serialize to `ram:SpecifiedTradePaymentTerms`. Whenever `totals.duePayable` is positive, `validateEn16931` requires at least one of the two — mirroring BR-CO-25, which the EXTENDED Schematron enforces (EN 16931's doesn't carry this particular rule, but the underlying field is the same, so checking it here is never a false positive).
+
 ## Amounts don't carry a currency, except one
 
 Every `ram:*Amount` element is serialized without `currencyID` — the invoice's single `currency` is implicit throughout, and the EN 16931 / EXTENDED Schematron rejects the attribute wherever it's redundant ("attribute not used in the given context"). The lone exception is `ram:TaxTotalAmount` (BT-110), which always carries `currencyID` set to that same `currency`: the Schematron's rule for this one element is conditional rather than a flat rejection, and permits `currencyID` when it matches `InvoiceCurrencyCode` — presumably to disambiguate it from an optional second VAT total in a separate accounting currency (BT-111, unsupported here — there's exactly one `currency` per invoice).
@@ -214,12 +220,7 @@ Known and unaddressed, from a review of the library:
 
 - The XMP conformance gate in the parser rejects `zugferd-invoice.xml` even though attachment extraction accepts it, and the `1.07` version check is exact string equality.
 - Unit prices (BT-146) are serialized at 2 decimals, so `quantity × netPrice` stops reconciling with `lineTotal` for prices carrying more precision.
-- The deserializer does not guard `Number()` for quantity, VAT rate, calculation percent or breakdown rate — a continental `1,5` becomes `NaN` without an error.
-- BR-CO-17 (`calculatedAmount ≈ basisAmount × rate / 100`) is not enforced, and line-level allowances are never reconciled against the line total.
-- Amount comparisons use a fixed 0.02 absolute tolerance, which is looser than the exact comparison strict validators apply.
 - Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
-- No mapping exists for BT-9 (payment due date) or BT-20 (payment terms description); `SpecifiedTradePaymentTerms` is never serialized. Found by running `validateSchematron` against the EXTENDED profile: BR-CO-25 requires one of the two whenever `duePayable` is positive, and the library's own sample invoice fails it.
-- `xmlEscape` handles the five XML entities but does not strip C0 control characters.
 
 ## XSD validation
 

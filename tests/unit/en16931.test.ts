@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateEn16931 } from '../../src/profiles/en16931.js';
+import { serialize } from '../../src/xml/serializer.js';
+import { deserialize } from '../../src/xml/deserializer.js';
 import { sampleInvoice } from '../fixtures/invoice.js';
 
 describe('validateEn16931', () => {
@@ -241,5 +243,126 @@ describe('validateEn16931', () => {
     const result = validateEn16931(invalid);
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.code === 'AMOUNT_MISMATCH' && e.field === 'totals.allowanceTotal')).toBe(true);
+  });
+
+  describe('BR-CO-25 — payment due date or terms when duePayable is positive', () => {
+    it('rejects a positive duePayable with neither paymentDueDate nor paymentTerms', () => {
+      const invoice = { ...sampleInvoice(), paymentTerms: undefined };
+      const result = validateEn16931(invoice);
+      expect(result.errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(true);
+    });
+
+    it('accepts paymentDueDate alone, with no paymentTerms', () => {
+      const invoice = { ...sampleInvoice(), paymentTerms: undefined, paymentDueDate: new Date(Date.UTC(2026, 8, 8)) };
+      expect(validateEn16931(invoice).errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(false);
+    });
+
+    it('does not require either field when duePayable is zero or negative', () => {
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        paymentTerms: undefined,
+        totals: { ...base.totals, prepaid: base.totals.grandTotal, duePayable: 0 },
+      };
+      expect(validateEn16931(invoice).errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(false);
+    });
+
+    it('rejects an empty-string paymentTerms as if it were absent', () => {
+      // An empty paymentTerms fails BR-CO-25 on the wire too: buildPaymentTerms
+      // only emits ram:Description for a non-empty string, so the two must agree.
+      const invoice = { ...sampleInvoice(), paymentTerms: '' };
+      expect(validateEn16931(invoice).errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(true);
+    });
+  });
+
+  describe('BR-CO-17 — VAT category tax amount vs. basisAmount × rate / 100', () => {
+    it('accepts a calculatedAmount within the 1-unit tolerance', () => {
+      const invoice = sampleInvoice();
+      // 195 × 20 / 100 = 39 exactly; 39.9 is still within the official ±1 slack.
+      const invalid = { ...invoice, taxBreakdown: [{ ...invoice.taxBreakdown[0]!, calculatedAmount: 39.9 }] };
+      expect(validateEn16931(invalid).errors.some((e) => e.field === 'taxBreakdown[0].calculatedAmount')).toBe(false);
+    });
+
+    it('rejects a calculatedAmount clearly outside the formula', () => {
+      const invoice = sampleInvoice();
+      const invalid = { ...invoice, taxBreakdown: [{ ...invoice.taxBreakdown[0]!, calculatedAmount: 100 }] };
+      const result = validateEn16931(invalid);
+      expect(result.errors.some((e) => e.field === 'taxBreakdown[0].calculatedAmount' && e.code === 'AMOUNT_MISMATCH')).toBe(true);
+    });
+  });
+
+  describe('line-level allowances/charges reconciled against lineTotal', () => {
+    it('accepts a line whose allowances/charges are reflected in lineTotal', () => {
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        lines: [
+          {
+            ...base.lines[0]!,
+            // 100 × 2 - 15 (allowance) + 5 (charge) = 190
+            allowances: [{ amount: 15, vatCategory: 'S' as const, vatRate: 20 }],
+            charges: [{ amount: 5, vatCategory: 'S' as const, vatRate: 20 }],
+            lineTotal: 190,
+          },
+        ],
+      };
+      expect(validateEn16931(invoice).errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
+    });
+
+    it('rejects a lineTotal that ignores its own allowances', () => {
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        lines: [
+          {
+            ...base.lines[0]!,
+            allowances: [{ amount: 15, vatCategory: 'S' as const, vatRate: 20 }],
+            // Should be 185 (200 - 15); left at 200 as if the allowance were ignored.
+          },
+        ],
+      };
+      const result = validateEn16931(invoice);
+      expect(result.errors.some((e) => e.field === 'lines[0].lineTotal' && e.code === 'AMOUNT_MISMATCH')).toBe(true);
+    });
+
+    it('tolerates the rounding drift from a sub-cent netPrice surviving a serialize/deserialize round-trip', () => {
+      // netPrice is serialized at 2 decimals (BT-146's own documented
+      // limitation, see README). A sub-cent price like 10.005 comes back as
+      // 10.01, so quantity × netPrice drifts from the original lineTotal by
+      // up to ~1 cent per unit — that drift must not itself be flagged.
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        allowances: undefined,
+        lines: [{ ...base.lines[0]!, netPrice: 10.005, grossPrice: undefined, priceDiscount: undefined, quantity: 2, lineTotal: 20.01 }],
+        taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 20.01, calculatedAmount: 4 }],
+        totals: { lineTotal: 20.01, taxBasisTotal: 20.01, taxTotal: 4, grandTotal: 24.01, duePayable: 24.01 },
+      };
+
+      const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+      expect(roundTripped.lines[0]!.netPrice).toBe(10.01); // confirms the drift is really there
+
+      const result = validateEn16931(roundTripped);
+      expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
+    });
+  });
+
+  it('does not misreport a mismatch from float drift when several lines sum exactly at 2 decimals', () => {
+    // 0.1 + 0.2 !== 0.3 in IEEE 754 float, by about 5.5e-17 — comparing via
+    // toFixed(2) (what actually goes on the wire) must absorb that, not reject
+    // a document the real Schematron (decimal arithmetic, rounded once) accepts.
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [
+        { ...base.lines[0]!, id: '1', netPrice: 0.1, quantity: 1, lineTotal: 0.1 },
+        { ...base.lines[0]!, id: '2', netPrice: 0.2, quantity: 1, lineTotal: 0.2 },
+      ],
+      taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 0.3, calculatedAmount: 0.06 }],
+      totals: { ...base.totals, lineTotal: 0.3, taxBasisTotal: 0.3, taxTotal: 0.06, grandTotal: 0.36, duePayable: 0.36 },
+    };
+
+    const result = validateEn16931(invoice);
+    expect(result.errors.some((e) => e.field === 'totals.lineTotal')).toBe(false);
   });
 });

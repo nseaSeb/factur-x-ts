@@ -12,6 +12,14 @@ import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformV
 
 export type { ValidationError, ValidationErrorCode, ValidationOptions, ValidationResult };
 
+// BR-CO-17's tolerance, read off the official EN 16931 Schematron
+// (Factur-X_1.09_EN16931.xsl): `abs(CalculatedAmount) - 1 <= expected` and
+// `abs(CalculatedAmount) + 1 >= expected`, where `expected` is
+// basisAmount × rate / 100 rounded to 2 decimals. The `1` there is a full
+// currency unit, not a cent — looks like a typo until you check the source,
+// so don't "fix" it to 0.01.
+const VAT_CALCULATION_TOLERANCE = 1;
+
 /**
  * BT-8, restricted by EN 16931 (BR-CL-06) to this subset of UNTDID 2475.
  *
@@ -24,10 +32,6 @@ export const VAT_POINT_DATE_CODES: Readonly<Record<string, string>> = {
   '29': 'date de livraison (livraison de biens)',
   '72': 'date de paiement (TVA à l\'encaissement)',
 };
-
-// Amounts are 2-decimal EN 16931 values; this tolerance absorbs independent
-// per-line/per-breakdown rounding without masking genuine mismatches.
-const AMOUNT_TOLERANCE = 0.02;
 
 // Categories where EN 16931 (BR-Z/E/G/O/K/AE-*) requires a 0% rate.
 const ZERO_RATE_CATEGORIES: readonly VatCategoryCode[] = ['Z', 'E', 'G', 'O', 'K', 'AE'];
@@ -91,6 +95,7 @@ export function validateEn16931(invoice: FacturXInvoice, options: ValidationOpti
   });
   validateTaxBreakdownCoversLines(invoice, errors);
   validateAmounts(invoice, errors);
+  validatePaymentTerms(invoice, errors);
 
   errors.push(...validateCodeLists(invoice, options).errors);
 
@@ -149,6 +154,33 @@ function validateLine(line: LineItem, index: number, errors: ValidationError[]):
   if (line.vatCategory === 'S' && line.vatRate <= 0) {
     errors.push(field(`${prefix}.vatRate`, 'INVALID_VAT_RATE', `Line ${line.id}: VAT category S (standard rate) requires a rate above 0% (BR-S-1)`));
   }
+
+  // BT-146 (netPrice) already reflects any price discount (BT-147/148, folded
+  // in before serialization) — the allowances/charges reconciled here are the
+  // separate BG-27/BG-28 groups applied on top of quantity × net price to get
+  // BT-131 (lineTotal). EN 16931 doesn't assert this with its own BR number
+  // (unlike the header-level sums, BR-CO-10/13/14/15/16), so none is cited.
+  //
+  // Unlike those header sums, this one can't use exact (rounded-once)
+  // comparison: netPrice only round-trips through the wire at 2 decimals
+  // (BT-146's own known limitation — see README), so a sub-cent unit price
+  // comes back from deserialize() already rounded, and quantity × netPrice
+  // then drifts from the original lineTotal by up to ~1 cent per unit. A
+  // tolerance scaled to quantity absorbs exactly that rounding, without
+  // masking a genuinely wrong lineTotal.
+  const allowanceSum = (line.allowances ?? []).reduce((sum, ac) => sum + ac.amount, 0);
+  const chargeSum = (line.charges ?? []).reduce((sum, ac) => sum + ac.amount, 0);
+  const expectedLineTotal = line.netPrice * line.quantity - allowanceSum + chargeSum;
+  const lineTotalTolerance = 0.01 * Math.max(1, line.quantity);
+  if (Math.abs(expectedLineTotal - line.lineTotal) > lineTotalTolerance) {
+    errors.push(
+      field(
+        `${prefix}.lineTotal`,
+        'AMOUNT_MISMATCH',
+        `Line ${line.id}: lineTotal (${line.lineTotal.toFixed(2)}) does not equal quantity × net price adjusted by line-level allowances/charges (${expectedLineTotal.toFixed(2)})`,
+      ),
+    );
+  }
 }
 
 function validateTaxBreakdown(tb: TaxBreakdown, index: number, errors: ValidationError[]): void {
@@ -166,6 +198,17 @@ function validateTaxBreakdown(tb: TaxBreakdown, index: number, errors: Validatio
         `${prefix}.exemptionReason`,
         'MISSING_EXEMPTION_REASON',
         `VAT breakdown category ${tb.category} requires an exemption reason or reason code (BR-${tb.category}-2/3)`,
+      ),
+    );
+  }
+
+  const expectedCalculatedAmount = round2(Math.abs(tb.basisAmount) * (tb.rate / 100));
+  if (Math.abs(Math.abs(tb.calculatedAmount) - expectedCalculatedAmount) > VAT_CALCULATION_TOLERANCE) {
+    errors.push(
+      field(
+        `${prefix}.calculatedAmount`,
+        'AMOUNT_MISMATCH',
+        `VAT breakdown category ${tb.category}: calculatedAmount (${tb.calculatedAmount.toFixed(2)}) does not match basisAmount × rate / 100 (${expectedCalculatedAmount.toFixed(2)}), within a 1-unit tolerance (BR-CO-17)`,
       ),
     );
   }
@@ -250,8 +293,37 @@ function validateAllowanceChargeTotal(
   errors.push(field(fieldName, 'AMOUNT_MISMATCH', message));
 }
 
+// EN 16931 amounts are 2-decimal by contract, and the official Schematron's
+// header-sum rules (BR-CO-10/11/12/13/14/15/16) compare exactly after
+// rounding the sum to cents once — not with a fixed absolute slack. Matching
+// that: round each side to 2 decimals the same way the wire format does
+// (`toFixed`, not `Math.round(x * 100)`, which misrounds values like 1.005
+// due to float representation) and compare exactly.
 function isClose(a: number, b: number): boolean {
-  return Math.abs(a - b) <= AMOUNT_TOLERANCE;
+  return a.toFixed(2) === b.toFixed(2);
+}
+
+function round2(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+// BR-CO-25 (asserted by the EXTENDED Schematron; EN 16931's doesn't carry it,
+// but the underlying CII field and rounded-total semantics are shared, so
+// checking it universally here is still correct — never a false positive).
+function validatePaymentTerms(invoice: FacturXInvoice, errors: ValidationError[]): void {
+  if (invoice.totals.duePayable <= 0) return;
+  // Truthy, not just !== undefined: buildPaymentTerms only emits ram:Description
+  // for a non-empty string, so an empty paymentTerms would pass here but leave
+  // the wire XML without a ram:Description for BR-CO-25's own XPath to find.
+  if (invoice.paymentDueDate !== undefined || invoice.paymentTerms) return;
+
+  errors.push(
+    field(
+      'paymentDueDate',
+      'MISSING_PAYMENT_TERMS',
+      'duePayable is positive: paymentDueDate (BT-9) or paymentTerms (BT-20) is required (BR-CO-25)',
+    ),
+  );
 }
 
 function field(fieldName: string, code: ValidationErrorCode, message: string): ValidationError {

@@ -62,6 +62,7 @@ export function sampleInvoice(): FacturXInvoice {
       grandTotal: 234,
       duePayable: 234,
     },
+    paymentTerms: '30 jours net',
     notes: [{ content: 'Merci de votre confiance' }],
     precedingInvoices: [{ number: 'INV-2025-999', issueDate: new Date(Date.UTC(2025, 11, 1)) }],
   };

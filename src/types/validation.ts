@@ -22,7 +22,9 @@ export type ValidationErrorCode =
   | 'FORBIDDEN_TYPE_CODE_FOR_BUSINESS_PROCESS'
   | 'INCONSISTENT_VAT_POINT_DATE'
   | 'MISSING_LEGAL_ID'
-  | 'INVALID_LEGAL_ID';
+  | 'INVALID_LEGAL_ID'
+  // BR-CO-25: BT-9 or BT-20 required whenever duePayable is positive.
+  | 'MISSING_PAYMENT_TERMS';
 
 export interface ValidationError {
   readonly code: ValidationErrorCode;

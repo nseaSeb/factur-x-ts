@@ -256,20 +256,43 @@ function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency:
     ...(invoice.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true)),
   ].join('');
 
+  const paymentTerms = buildPaymentTerms(invoice);
+
   return (
     `<ram:ApplicableHeaderTradeSettlement>` +
     el('ram:InvoiceCurrencyCode', currency) +
     paymentMeans +
     taxes +
     billingPeriod +
-    // CII D22B sequence: SpecifiedTradeAllowanceCharge sits between
-    // BillingSpecifiedPeriod and SpecifiedTradeSettlementHeaderMonetarySummation.
+    // CII D22B sequence: SpecifiedTradeAllowanceCharge, then
+    // SpecifiedTradePaymentTerms, then SpecifiedTradeSettlementHeaderMonetarySummation.
     // Order is schema-significant and no XSD check runs here — do not reorder.
     allowancesCharges +
+    paymentTerms +
     buildMonetarySummation(invoice.totals, currency) +
     precedingInvoices +
     `</ram:ApplicableHeaderTradeSettlement>`
   );
+}
+
+// BR-CO-25 (EXTENDED Schematron): the amount due for payment positive requires
+// one of BT-9 (due date) or BT-20 (terms text) — validateEn16931 enforces this
+// on the model; here we just emit whichever fields are present.
+function buildPaymentTerms(invoice: FacturXInvoice): string {
+  const description = invoice.paymentTerms ? el('ram:Description', invoice.paymentTerms) : '';
+  const dueDate =
+    invoice.paymentDueDate !== undefined
+      ? elDate102('ram:DueDateDateTime', 'udt:DateTimeString', invoice.paymentDueDate)
+      : '';
+
+  // An empty (falsy) paymentTerms with no paymentDueDate must not emit an
+  // empty ram:SpecifiedTradePaymentTerms — BR-CO-25's own check looks for
+  // .../ram:Description or .../ram:DueDateDateTime, so a childless element
+  // would satisfy neither, unlike validatePaymentTerms's truthiness check.
+  if (description === '' && dueDate === '') return '';
+
+  // ram:TradePaymentTermsType sequence: Description, then DueDateDateTime.
+  return `<ram:SpecifiedTradePaymentTerms>${description}${dueDate}</ram:SpecifiedTradePaymentTerms>`;
 }
 
 function buildPaymentMeans(pm: PaymentMean): string {
@@ -400,6 +423,11 @@ function formatDate102(date: Date): string {
 
 function xmlEscape(value: string): string {
   return value
+    // XML 1.0 permits only Tab/LF/CR (\x09/\x0A/\x0D) among the C0 controls;
+    // the rest are not valid character data even escaped, so they're dropped
+    // rather than passed through to a well-formedness error downstream.
+    // eslint-disable-next-line no-control-regex -- intentional: stripping C0 controls, not matching them by accident
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

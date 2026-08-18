@@ -34,6 +34,16 @@ export interface FacturXInvoice {
   readonly businessProcess?: string;
   /** Date d'exigibilité TVA (BT-8). Ex: '5', '29', '72' */
   readonly taxDueDateTypeCode?: string;
+
+  /** BT-9 — date d'échéance de paiement. */
+  readonly paymentDueDate?: Date;
+  /**
+   * BT-20 — conditions de paiement, texte libre (ex: '30 jours net').
+   *
+   * BR-CO-25 exige l'un des deux (`paymentDueDate` ou `paymentTerms`) dès que
+   * `totals.duePayable` est positif.
+   */
+  readonly paymentTerms?: string;
 }
 
 // ---- Types auxiliaires ----
