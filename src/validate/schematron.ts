@@ -152,12 +152,19 @@ async function postToSaxon(
   form.set('xsl', new Blob([xsl], { type: 'text/xml' }), 'schematron.xsl');
 
   let response: Response;
+  let body: string;
   try {
     response = await fetch(endpoint, {
       method: 'POST',
       body: form,
       signal: AbortSignal.timeout(timeoutMs),
     });
+    // The abort signal stays live through body consumption, not just the
+    // header exchange — a timeout or connection reset mid-stream (a large
+    // EXTENDED SVRL report on an emulated-arm64 Saxon container can take on
+    // the order of a minute) must surface the same way a connection failure
+    // does, not escape as a raw AbortError/TypeError.
+    body = await response.text();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new FacturXSaxonError(`Saxon server unreachable at ${endpoint}: ${message}`, { cause: error });
@@ -167,7 +174,7 @@ async function postToSaxon(
     throw new FacturXSaxonError(`Saxon server returned HTTP ${response.status} for ${endpoint}`);
   }
 
-  return response.text();
+  return body;
 }
 
 // --- SVRL interpretation ---------------------------------------------------
@@ -178,7 +185,11 @@ interface SvrlFinding {
   readonly '@_flag'?: string;
   readonly '@_location'?: string;
   readonly '@_test'?: string;
-  readonly text?: string;
+  // Usually a plain string, but fast-xml-parser produces an object instead
+  // when svrl:text contains child markup (e.g. a caller-supplied options.xsl
+  // for a national rule set emphasizing part of the message) — textOf below
+  // flattens either shape to a string.
+  readonly text?: unknown;
 }
 
 interface ParsedSvrl {
@@ -193,33 +204,50 @@ function asFindingArray(value: SvrlFinding | SvrlFinding[] | undefined): SvrlFin
   return Array.isArray(value) ? value : [value];
 }
 
-function violationOf(node: SvrlFinding): SchematronViolation {
-  const violation: {
-    message?: string;
-    location?: string;
-    test?: string;
-    flag?: string;
-  } = {};
-  if (node.text !== undefined) violation.message = node.text;
-  if (node['@_location'] !== undefined) violation.location = node['@_location'];
-  if (node['@_test'] !== undefined) violation.test = node['@_test'];
-  if (node['@_flag'] !== undefined) violation.flag = node['@_flag'];
-  return violation;
+// Flattens svrl:text to a string whether fast-xml-parser gave back a plain
+// string (no child markup) or an object (child markup present) — see the
+// comment on SvrlFinding.text. fast-xml-parser groups mixed content by tag
+// name rather than preserving document order, so the flattened text may come
+// back reordered relative to the source; a string with every text fragment
+// present, order notwithstanding, is still far better than losing the
+// message to "[object Object]".
+function textOf(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value !== null && typeof value === 'object') {
+    const parts = Object.values(value).map(textOf).filter((part) => part !== undefined);
+    const joined = parts.join(' ').trim();
+    return joined === '' ? undefined : joined;
+  }
+  return undefined;
 }
 
-export function parseSvrl(svrl: string): SchematronViolation[] {
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    textNodeName: '#text',
-    removeNSPrefix: true,
-    parseTagValue: false,
-    trimValues: true,
-    ignoreDeclaration: true,
-    isArray: (tagName) => tagName === 'failed-assert' || tagName === 'successful-report',
-  });
+function violationOf(node: SvrlFinding): SchematronViolation {
+  const message = textOf(node.text);
+  return {
+    ...(message !== undefined ? { message } : {}),
+    ...(node['@_location'] !== undefined ? { location: node['@_location'] } : {}),
+    ...(node['@_test'] !== undefined ? { test: node['@_test'] } : {}),
+    ...(node['@_flag'] !== undefined ? { flag: node['@_flag'] } : {}),
+  };
+}
 
-  const parsed = parser.parse(svrl) as ParsedSvrl;
+// fast-xml-parser instances are stateless once configured — one shared
+// instance avoids rebuilding the parser on every validateSchematron call.
+const svrlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  textNodeName: '#text',
+  removeNSPrefix: true,
+  parseTagValue: false,
+  trimValues: true,
+  ignoreDeclaration: true,
+  isArray: (tagName) => tagName === 'failed-assert' || tagName === 'successful-report',
+});
+
+export function parseSvrl(svrl: string): SchematronViolation[] {
+  const parsed = svrlParser.parse(svrl) as ParsedSvrl;
   const output = parsed['schematron-output'];
   if (output === undefined) {
     // A 200 OK body that isn't actually an SVRL report (a misconfigured

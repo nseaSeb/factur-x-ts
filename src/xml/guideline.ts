@@ -17,19 +17,21 @@ interface ParsedGuideline {
   };
 }
 
-export function detectProfile(xml: string): Profile | undefined {
-  const parser = new XMLParser({
-    ignoreAttributes: true,
-    textNodeName: '#text',
-    removeNSPrefix: true,
-    parseTagValue: false,
-    trimValues: true,
-    ignoreDeclaration: true,
-  });
+// fast-xml-parser instances are stateless once configured — one shared
+// instance avoids rebuilding the parser on every detectProfile call.
+const guidelineParser = new XMLParser({
+  ignoreAttributes: true,
+  textNodeName: '#text',
+  removeNSPrefix: true,
+  parseTagValue: false,
+  trimValues: true,
+  ignoreDeclaration: true,
+});
 
+export function detectProfile(xml: string): Profile | undefined {
   let parsed: ParsedGuideline;
   try {
-    parsed = parser.parse(xml) as ParsedGuideline;
+    parsed = guidelineParser.parse(xml) as ParsedGuideline;
   } catch {
     return undefined;
   }

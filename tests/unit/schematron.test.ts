@@ -57,6 +57,26 @@ describe('parseSvrl', () => {
     expect(violations[0]).not.toHaveProperty('flag');
   });
 
+  it('flattens svrl:text to a string even when it contains child markup', () => {
+    // fast-xml-parser returns an object, not a string, for an element with
+    // child elements — reachable via a caller-supplied options.xsl (e.g. a
+    // national rule set) that emphasizes part of its message text. Order
+    // isn't preserved (fast-xml-parser groups mixed content by tag name),
+    // but every fragment of text must survive as a string, not "[object
+    // Object]".
+    const violations = parseSvrl(
+      svrl(
+        `<svrl:failed-assert test="BR-04" location="/d">` +
+          `<svrl:text>Missing <b>mandatory</b> field</svrl:text>` +
+          `</svrl:failed-assert>`,
+      ),
+    );
+    expect(typeof violations[0]?.message).toBe('string');
+    expect(violations[0]?.message).toContain('mandatory');
+    expect(violations[0]?.message).toContain('Missing');
+    expect(violations[0]?.message).toContain('field');
+  });
+
   it('throws rather than silently returning no violations for a non-SVRL body', () => {
     // A misconfigured endpoint, a Saxon fault page, or a plain-text error
     // response would otherwise parse to "no failed-assert / successful-report

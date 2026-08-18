@@ -70,21 +70,70 @@ async function loadPreload(
   );
 }
 
+interface LoadedSchema {
+  readonly mainContents: string;
+  readonly preload: { fileName: string; contents: string }[];
+}
+
+// The 4 schema files per profile never change within a process; cache the
+// read so validating many invoices in a row doesn't re-read them every call
+// — mirrors validate/schematron.ts's xslCache for the same reason. Only 2
+// possible keys (the bundled profiles), so an unbounded Map is fine.
+const schemaCache = new Map<SchemaBundle, Promise<LoadedSchema>>();
+
+async function loadSchema(bundle: SchemaBundle): Promise<LoadedSchema> {
+  const cached = schemaCache.get(bundle);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const promise = Promise.all([readSchemaFile(bundle.main), loadPreload(bundle.imports)])
+    .then(([mainContents, preload]) => ({ mainContents, preload }))
+    .catch((error: unknown) => {
+      // Don't cache a failure (e.g. a transient read error) forever.
+      schemaCache.delete(bundle);
+      throw error;
+    });
+
+  schemaCache.set(bundle, promise);
+  return promise;
+}
+
+// The bare specifier resolves on its own (no execution) iff the package
+// itself is present on disk — distinguishes "xmllint-wasm isn't installed"
+// from "xmllint-wasm is installed but something inside it (or one of ITS
+// dependencies) is broken", which also throws ERR_MODULE_NOT_FOUND/
+// MODULE_NOT_FOUND and would otherwise be misreported as the former.
+//
+// import.meta.resolve was async (returning a Promise) before Node 20.6 and
+// is synchronous (returning a string) from 20.6 onward. Checking the return
+// type rather than assuming sync keeps this correct on both: an unawaited
+// Promise is truthy and would otherwise always report "installed".
+function isPackageInstalled(specifier: string): boolean {
+  try {
+    return typeof import.meta.resolve(specifier) === 'string';
+  } catch {
+    return false;
+  }
+}
+
 async function loadValidateXML(): Promise<typeof import('xmllint-wasm').validateXML> {
   try {
     const mod = await import('xmllint-wasm');
     return mod.validateXML;
   } catch (error) {
     const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-    if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+    const isNotFound = code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND';
+    if (isNotFound && !isPackageInstalled('xmllint-wasm')) {
       throw new Error(
         'validateXsd requires the optional dependency "xmllint-wasm". Install it with `npm install xmllint-wasm`.',
         { cause: error },
       );
     }
-    // Some other failure (WASM instantiation, a sandboxed worker_threads
-    // restriction, a corrupted install) — xmllint-wasm IS resolvable, so
-    // reporting "not installed" here would be actively misleading.
+    // xmllint-wasm IS resolvable (installed, or the failure isn't a missing
+    // module at all — WASM instantiation, a sandboxed worker_threads
+    // restriction), so reporting "not installed" here would be actively
+    // misleading; the real cause travels via `cause`.
     throw new Error('validateXsd failed to load "xmllint-wasm".', { cause: error });
   }
 }
@@ -118,10 +167,9 @@ export async function validateXsd(
     throw new FacturXXsdNotBundledError(profile);
   }
 
-  const [validateXML, mainContents, preload] = await Promise.all([
+  const [validateXML, { mainContents, preload }] = await Promise.all([
     loadValidateXML(),
-    readSchemaFile(bundle.main),
-    loadPreload(bundle.imports),
+    loadSchema(bundle),
   ]);
 
   const result = await validateXML({
