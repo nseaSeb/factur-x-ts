@@ -33,7 +33,7 @@ export function serialize(invoice: FacturXInvoice, profile: Profile): string {
     `xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:100">` +
     buildExchangedDocumentContext(invoice, profile) +
     buildExchangedDocument(invoice) +
-    buildSupplyChainTradeTransaction(invoice, currency) +
+    buildSupplyChainTradeTransaction(invoice, currency, profile) +
     `</rsm:CrossIndustryInvoice>`;
 
   return body;
@@ -78,8 +78,8 @@ function buildNote(note: Note): string {
 
 // ---- SupplyChainTradeTransaction ----
 
-function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: string): string {
-  const lineItems = invoice.lines.map((line) => buildLineItem(line)).join('');
+function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: string, profile: Profile): string {
+  const lineItems = invoice.lines.map((line) => buildLineItem(line, profile)).join('');
 
   return (
     `<rsm:SupplyChainTradeTransaction>` +
@@ -93,7 +93,7 @@ function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: str
 
 // ---- Line items ----
 
-function buildLineItem(line: LineItem): string {
+function buildLineItem(line: LineItem, profile: Profile): string {
   const priceDiscount =
     line.grossPrice !== undefined && line.priceDiscount !== undefined
       ? `<ram:AppliedTradeAllowanceCharge>` +
@@ -117,9 +117,17 @@ function buildLineItem(line: LineItem): string {
 
   const description = line.description ? el('ram:Description', line.description) : '';
 
+  const shipTo = profile === 'EXTENDED' && line.shipTo ? buildTradeParty(line.shipTo, 'ram:ShipToTradeParty') : '';
+  const deliveryEvent =
+    profile === 'EXTENDED' && line.deliveryDate !== undefined
+      ? `<ram:ActualDeliverySupplyChainEvent>${elDate102('ram:OccurrenceDateTime', 'udt:DateTimeString', line.deliveryDate)}</ram:ActualDeliverySupplyChainEvent>`
+      : '';
+  const linePrecedingInvoice =
+    profile === 'EXTENDED' && line.precedingInvoice ? buildPrecedingInvoice(line.precedingInvoice) : '';
+
   return (
     `<ram:IncludedSupplyChainTradeLineItem>` +
-    `<ram:AssociatedDocumentLineDocument>${el('ram:LineID', line.id)}</ram:AssociatedDocumentLineDocument>` +
+    `<ram:AssociatedDocumentLineDocument>${el('ram:LineID', line.id)}${buildLineNotes(line, profile)}</ram:AssociatedDocumentLineDocument>` +
     `<ram:SpecifiedTradeProduct>${el('ram:Name', line.name)}${description}</ram:SpecifiedTradeProduct>` +
     `<ram:SpecifiedLineTradeAgreement>` +
     grossPrice +
@@ -127,6 +135,10 @@ function buildLineItem(line: LineItem): string {
     `</ram:SpecifiedLineTradeAgreement>` +
     `<ram:SpecifiedLineTradeDelivery>` +
     `<ram:BilledQuantity unitCode="${xmlEscape(line.unit)}">${formatQuantity(line.quantity)}</ram:BilledQuantity>` +
+    // LineTradeDeliveryType sequence: BilledQuantity, ShipToTradeParty,
+    // UltimateShipToTradeParty (unsupported), ActualDeliverySupplyChainEvent.
+    shipTo +
+    deliveryEvent +
     `</ram:SpecifiedLineTradeDelivery>` +
     `<ram:SpecifiedLineTradeSettlement>` +
     `<ram:ApplicableTradeTax>` +
@@ -138,9 +150,26 @@ function buildLineItem(line: LineItem): string {
     `<ram:SpecifiedTradeSettlementLineMonetarySummation>` +
     elAmount('ram:LineTotalAmount', line.lineTotal) +
     `</ram:SpecifiedTradeSettlementLineMonetarySummation>` +
+    // LineTradeSettlementType sequence: ..., the summation, THEN
+    // InvoiceReferencedDocument — counter-intuitive given the BT numbering,
+    // but that's the schema order.
+    linePrecedingInvoice +
     `</ram:SpecifiedLineTradeSettlement>` +
     `</ram:IncludedSupplyChainTradeLineItem>`
   );
+}
+
+// EXT-FR-FE-183: EN 16931's XSD caps ram:IncludedNote at one occurrence per
+// line with no ram:SubjectCode; EXTENDED's allows unbounded occurrences, each
+// with one. Only EXTENDED gets the full list — every other profile gets at
+// most the first note-with-content's Content, matching the Elixir sibling
+// (Facturx.CII.line_notes/2).
+function buildLineNotes(line: LineItem, profile: Profile): string {
+  const withContent = (line.notes ?? []).filter((n) => n.content.trim() !== '');
+  if (profile === 'EXTENDED') return withContent.map(buildNote).join('');
+
+  const first = withContent[0];
+  return first ? `<ram:IncludedNote>${el('ram:Content', first.content)}</ram:IncludedNote>` : '';
 }
 
 function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean): string {

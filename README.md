@@ -4,7 +4,7 @@ TypeScript-native [Factur-X](https://fnfe-mpe.org/factur-x/) generator and parse
 
 Strictly typed, no `any`. Two runtime dependencies: [`pdf-lib`](https://github.com/Hopding/pdf-lib) and [`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser).
 
-> **Status: 0.1.0, pre-release.** Not published to npm yet. The EN 16931 profile is implemented and validated; the other four profiles are declared but not fully mapped. See [Limitations](#limitations) before using this for real invoicing.
+> **Status: 0.1.0, pre-release.** Not published to npm yet. `EN 16931` is implemented and validated; `EXTENDED` adds the French line extensions on top of it; `BASIC` / `BASIC WL` / `MINIMUM` are guideline-URN only. See [Limitations](#limitations) before using this for real invoicing.
 
 ## Install
 
@@ -205,12 +205,25 @@ Every `ram:*Amount` element is serialized without `currencyID` — the invoice's
 | Profile | Status |
 | --- | --- |
 | `EN 16931` | Implemented, validated, veraPDF-checked |
-| `BASIC` | Serializes with the correct guideline URN; no profile-specific rule set |
-| `EXTENDED` | Serializes with the correct guideline URN; no profile-specific rule set |
-| `BASIC WL` | Guideline URN only; reduced-profile field rules not implemented |
-| `MINIMUM` | Guideline URN only; reduced-profile field rules not implemented |
+| `EXTENDED` | Same structure as `EN 16931`, plus the four French-extension line fields below |
+| `BASIC` | Guideline URN only |
+| `BASIC WL` | Guideline URN only |
+| `MINIMUM` | Guideline URN only |
 
-Only `EN 16931` runs mandatory-rule validation before generating. The others serialize whatever you hand them.
+Only `EN 16931` runs mandatory-rule validation before generating. The `profile` argument otherwise picks the guideline URN and, for the four fields below, what a line is allowed to carry — it does **not** restrict which fields a reduced profile (`BASIC` / `BASIC WL` / `MINIMUM`) may emit: `serialize` writes the same full structure regardless of the declared profile, same as the Elixir sibling (`Facturx.CII` has no such restriction either — verified by reading its source, not assumed).
+
+### EXTENDED-only line fields (EXT-FR-FE-\*)
+
+Four `LineItem` fields are French EXTENDED extensions — not EN 16931 business terms — and `serialize` silently drops them under every other profile rather than erroring, mirroring `Facturx.CII`'s `line_notes` / `line_ship_to` / `line_delivery_event` / `line_preceding_invoice`:
+
+| Field | CII element | EN 16931 behaviour |
+| --- | --- | --- |
+| `notes` | `ram:IncludedNote` (× N, with `SubjectCode`) | Only `notes[0]`'s content survives, without `SubjectCode` — EN 16931's XSD caps this at one occurrence with no subject code |
+| `shipTo` | `ram:ShipToTradeParty` | Dropped |
+| `deliveryDate` | `ram:ActualDeliverySupplyChainEvent` | Dropped |
+| `precedingInvoice` | `ram:InvoiceReferencedDocument` (line-level, distinct from the document-level `precedingInvoices`) | Dropped |
+
+Setting any of these on a non-`EXTENDED` invoice is not an error — same "profile decides, not the caller" philosophy as `taxDueDateTypeCode` — but a `parse(generate(...))` round-trip only reproduces them under `EXTENDED`.
 
 `EN 16931` and `EXTENDED` additionally ship a bundled XSD, checkable with [`validateXsd`](#xsd-validation); `BASIC`, `BASIC WL` and `MINIMUM` don't.
 

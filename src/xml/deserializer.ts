@@ -112,18 +112,25 @@ interface ParsedLineTradeAgreement {
 
 type QuantityNode = string | (TextNode & { readonly '@_unitCode'?: string }) | undefined;
 
+interface ParsedSupplyChainEvent {
+  readonly OccurrenceDateTime?: ParsedDateTime;
+}
+
 interface ParsedLineTradeDelivery {
   readonly BilledQuantity?: QuantityNode;
+  readonly ShipToTradeParty?: ParsedTradeParty;
+  readonly ActualDeliverySupplyChainEvent?: ParsedSupplyChainEvent;
 }
 
 interface ParsedLineTradeSettlement {
   readonly ApplicableTradeTax?: ParsedLineTradeTax;
   readonly SpecifiedTradeAllowanceCharge?: readonly ParsedAllowanceCharge[];
   readonly SpecifiedTradeSettlementLineMonetarySummation?: { readonly LineTotalAmount?: AmountNode };
+  readonly InvoiceReferencedDocument?: ParsedReferencedDocument;
 }
 
 interface ParsedLineItem {
-  readonly AssociatedDocumentLineDocument?: { readonly LineID?: string };
+  readonly AssociatedDocumentLineDocument?: { readonly LineID?: string; readonly IncludedNote?: readonly ParsedNote[] };
   readonly SpecifiedTradeProduct?: { readonly Name?: string; readonly Description?: string };
   readonly SpecifiedLineTradeAgreement?: ParsedLineTradeAgreement;
   readonly SpecifiedLineTradeDelivery?: ParsedLineTradeDelivery;
@@ -226,6 +233,9 @@ const ARRAY_PATHS = new Set<string>([
   // fast-xml-parser's non-array-by-default property access on an array.
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.SpecifiedTradePaymentTerms',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.IncludedSupplyChainTradeLineItem.SpecifiedLineTradeSettlement.SpecifiedTradeAllowanceCharge',
+  // EN 16931 caps this at one occurrence with no SubjectCode; EXTENDED
+  // allows unbounded (EXT-FR-FE-183) — see buildLineNotes in serializer.ts.
+  'CrossIndustryInvoice.SupplyChainTradeTransaction.IncludedSupplyChainTradeLineItem.AssociatedDocumentLineDocument.IncludedNote',
 ]);
 
 const CURRENCY_CODES: readonly CurrencyCode[] = ['EUR', 'USD', 'GBP'];
@@ -447,6 +457,22 @@ function parseLineItem(node: ParsedLineItem): LineItem {
   // to defined. Moving that guard makes this a compile error, not a crash.
   const description = node.SpecifiedTradeProduct.Description;
 
+  // EXTENDED-only fields (EXT-FR-FE-*, see LineItem in types/invoice.ts) —
+  // read unconditionally here regardless of the document's own profile, the
+  // same way taxRepresentative etc. are: parsing is profile-agnostic, only
+  // serialize() gates emission by profile.
+  const notes = (node.AssociatedDocumentLineDocument.IncludedNote ?? []).map(parseNote);
+  const delivery = node.SpecifiedLineTradeDelivery;
+  const shipTo = delivery?.ShipToTradeParty ? parseTradeParty(delivery.ShipToTradeParty) : undefined;
+  const deliveryDate = delivery?.ActualDeliverySupplyChainEvent
+    ? requireDate(
+        delivery.ActualDeliverySupplyChainEvent.OccurrenceDateTime,
+        `line ${id} ram:ActualDeliverySupplyChainEvent/ram:OccurrenceDateTime`,
+      )
+    : undefined;
+  const linePrecedingInvoiceNode = node.SpecifiedLineTradeSettlement?.InvoiceReferencedDocument;
+  const linePrecedingInvoice = linePrecedingInvoiceNode ? parsePrecedingInvoice(linePrecedingInvoiceNode) : undefined;
+
   return {
     id,
     name,
@@ -461,6 +487,10 @@ function parseLineItem(node: ParsedLineItem): LineItem {
     vatRate: requireNumber(tax.RateApplicablePercent, `line ${id} RateApplicablePercent`),
     ...(allowances.length > 0 ? { allowances } : {}),
     ...(charges.length > 0 ? { charges } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
+    ...(shipTo !== undefined ? { shipTo } : {}),
+    ...(deliveryDate !== undefined ? { deliveryDate } : {}),
+    ...(linePrecedingInvoice !== undefined ? { precedingInvoice: linePrecedingInvoice } : {}),
   };
 }
 

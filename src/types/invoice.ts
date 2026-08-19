@@ -108,6 +108,21 @@ export interface LineItem {
   readonly vatRate: number;
   readonly allowances?: AllowanceCharge[];
   readonly charges?: AllowanceCharge[];
+
+  /**
+   * French EXTENDED extensions (EXT-FR-FE-*), not EN 16931 business terms —
+   * silently dropped by `serialize` for every other profile, the same way
+   * the Elixir sibling's `Facturx.CII` gates them: EN 16931's XSD caps
+   * `ram:IncludedNote` at one occurrence per line with no `SubjectCode`
+   * (EXT-FR-FE-183), so only `notes[0]`'s content survives there.
+   */
+  readonly notes?: Note[];
+  /** EXT-FR-FE-BG-10 — delivery address specific to this line. EXTENDED only. */
+  readonly shipTo?: TradeParty;
+  /** EXT-FR-FE-BG-11 — delivery date specific to this line. EXTENDED only. */
+  readonly deliveryDate?: Date;
+  /** EXT-FR-FE-BG-06 — preceding invoice reference specific to this line, distinct from the document-level `precedingInvoices`. EXTENDED only. */
+  readonly precedingInvoice?: PrecedingInvoice;
 }
 
 export type VatCategoryCode = 'S' | 'E' | 'Z' | 'G' | 'O' | 'K' | 'AE';

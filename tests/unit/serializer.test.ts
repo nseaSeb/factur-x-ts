@@ -101,6 +101,84 @@ describe('serialize', () => {
   });
 });
 
+describe('EXTENDED-only line fields (EXT-FR-FE-*)', () => {
+  // French extensions on top of EN 16931 that only EXTENDED's XSD admits —
+  // mirrors Facturx.CII.line_notes/line_ship_to/line_delivery_event/
+  // line_preceding_invoice in the Elixir sibling: the profile decides what's
+  // emitted, not the caller, so setting these fields on a non-EXTENDED
+  // invoice is not an error, it's just silently dropped at serialize time.
+  function lineWithExtras(base: ReturnType<typeof sampleInvoice>) {
+    return {
+      ...base.lines[0]!,
+      notes: [
+        { content: 'first', subjectCode: 'AAI' },
+        { content: 'second', subjectCode: 'AAJ' },
+      ],
+      shipTo: {
+        name: 'Entrepôt Nord',
+        address: { lineOne: '9 rue du Port', postcode: '59000', city: 'Lille', country: 'FR' },
+      },
+      deliveryDate: new Date(Date.UTC(2026, 7, 15)),
+      precedingInvoice: { number: 'INV-2026-LINE-REF' },
+    };
+  }
+
+  it('emits every note with its SubjectCode only under EXTENDED', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, lines: [lineWithExtras(base)] };
+    const xml = serialize(invoice, 'EXTENDED');
+
+    expect(xml).toContain('<ram:IncludedNote><ram:Content>first</ram:Content><ram:SubjectCode>AAI</ram:SubjectCode></ram:IncludedNote>');
+    expect(xml).toContain('<ram:IncludedNote><ram:Content>second</ram:Content><ram:SubjectCode>AAJ</ram:SubjectCode></ram:IncludedNote>');
+  });
+
+  it('emits only the first note, content-only, under EN 16931', () => {
+    // EN 16931's XSD caps IncludedNote at one occurrence with no SubjectCode
+    // (EXT-FR-FE-183) — a second note or a SubjectCode there is invalid.
+    const base = sampleInvoice();
+    const invoice = { ...base, lines: [lineWithExtras(base)] };
+    const xml = serialize(invoice, 'EN 16931');
+
+    expect(xml).toContain('<ram:IncludedNote><ram:Content>first</ram:Content></ram:IncludedNote>');
+    expect(xml).not.toContain('second');
+    expect(xml).not.toContain('SubjectCode');
+  });
+
+  it('emits line-level ShipToTradeParty and ActualDeliverySupplyChainEvent only under EXTENDED, in schema order', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, lines: [lineWithExtras(base)] };
+    const extended = serialize(invoice, 'EXTENDED');
+
+    expect(extended).toContain('<ram:ShipToTradeParty>');
+    expect(extended).toContain('Entrepôt Nord');
+    expect(extended).toContain('<ram:ActualDeliverySupplyChainEvent><ram:OccurrenceDateTime><udt:DateTimeString format="102">20260815</udt:DateTimeString></ram:OccurrenceDateTime></ram:ActualDeliverySupplyChainEvent>');
+
+    // LineTradeDeliveryType sequence: BilledQuantity, ShipToTradeParty, ActualDeliverySupplyChainEvent.
+    const delivery = extended.slice(extended.indexOf('<ram:SpecifiedLineTradeDelivery>'));
+    expect(delivery.indexOf('<ram:BilledQuantity')).toBeLessThan(delivery.indexOf('<ram:ShipToTradeParty>'));
+    expect(delivery.indexOf('<ram:ShipToTradeParty>')).toBeLessThan(delivery.indexOf('<ram:ActualDeliverySupplyChainEvent>'));
+
+    const en16931 = serialize(invoice, 'EN 16931');
+    expect(en16931).not.toContain('ShipToTradeParty');
+    expect(en16931).not.toContain('ActualDeliverySupplyChainEvent');
+  });
+
+  it('emits line-level InvoiceReferencedDocument only under EXTENDED, after the line monetary summation', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, lines: [lineWithExtras(base)] };
+    const extended = serialize(invoice, 'EXTENDED');
+
+    expect(extended).toContain('<ram:IssuerAssignedID>INV-2026-LINE-REF</ram:IssuerAssignedID>');
+    // LineTradeSettlementType sequence: ..., the summation, THEN InvoiceReferencedDocument.
+    const settlement = extended.slice(extended.lastIndexOf('<ram:SpecifiedLineTradeSettlement>'));
+    expect(settlement.indexOf('<ram:SpecifiedTradeSettlementLineMonetarySummation>')).toBeLessThan(
+      settlement.indexOf('<ram:InvoiceReferencedDocument>'),
+    );
+
+    expect(serialize(invoice, 'EN 16931')).not.toContain('INV-2026-LINE-REF');
+  });
+});
+
 describe('serialize + deserialize round-trip', () => {
   it('reproduces the original invoice', () => {
     const invoice = sampleInvoice();
@@ -297,5 +375,56 @@ describe('serialize + deserialize round-trip', () => {
     const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
     expect(roundTripped.paymentTerms).toBe('30 jours net');
     expect(roundTripped.paymentDueDate).toEqual(new Date(Date.UTC(2026, 8, 8)));
+  });
+
+  it('round-trips the EXTENDED-only line fields (notes, shipTo, deliveryDate, precedingInvoice) under EXTENDED', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [
+        {
+          ...base.lines[0]!,
+          notes: [{ content: 'first', subjectCode: 'AAI' }],
+          shipTo: {
+            name: 'Entrepôt Nord',
+            address: { lineOne: '9 rue du Port', postcode: '59000', city: 'Lille', country: 'FR' },
+          },
+          deliveryDate: new Date(Date.UTC(2026, 7, 15)),
+          precedingInvoice: { number: 'INV-2026-LINE-REF' },
+        },
+      ],
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EXTENDED'));
+    expect(roundTripped.lines[0]!.notes).toEqual([{ content: 'first', subjectCode: 'AAI' }]);
+    expect(roundTripped.lines[0]!.shipTo).toEqual(invoice.lines[0].shipTo);
+    expect(roundTripped.lines[0]!.deliveryDate).toEqual(new Date(Date.UTC(2026, 7, 15)));
+    expect(roundTripped.lines[0]!.precedingInvoice).toEqual({ number: 'INV-2026-LINE-REF' });
+  });
+
+  it('drops the EXTENDED-only line fields under EN 16931, without erroring', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [
+        {
+          ...base.lines[0]!,
+          notes: [{ content: 'first', subjectCode: 'AAI' }],
+          shipTo: {
+            name: 'Entrepôt Nord',
+            address: { lineOne: '9 rue du Port', postcode: '59000', city: 'Lille', country: 'FR' },
+          },
+          deliveryDate: new Date(Date.UTC(2026, 7, 15)),
+          precedingInvoice: { number: 'INV-2026-LINE-REF' },
+        },
+      ],
+    };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+    // Content-only, no SubjectCode — the one note EN 16931's XSD leaves room for.
+    expect(roundTripped.lines[0]!.notes).toEqual([{ content: 'first' }]);
+    expect(roundTripped.lines[0]!.shipTo).toBeUndefined();
+    expect(roundTripped.lines[0]!.deliveryDate).toBeUndefined();
+    expect(roundTripped.lines[0]!.precedingInvoice).toBeUndefined();
   });
 });
