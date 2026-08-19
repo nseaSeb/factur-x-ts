@@ -1,6 +1,6 @@
 {
   "name": "factur-x-ts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TypeScript-native Factur-X EN 16931 PDF/A-3 generator and parser. Strictly typed, zero any.",
   "type": "module",
   "main": "./dist/index.js",
