@@ -33,7 +33,16 @@ export function hasDoctype(xml: string): boolean {
       i = end + 3;
       continue;
     }
-    return xml.startsWith('<!DOCTYPE', i);
+    // Case-insensitive: strict XML requires the uppercase keyword, but this
+    // is a defense-in-depth XXE pre-filter meant to reject anything a
+    // downstream processor might still treat as a doctype declaration in
+    // lenient/recovery mode — matching only the strict-case form would let a
+    // miscased "<!doctype" straight through to that processor. Safe to do
+    // here: this position is only ever reached by whitespace, an XML
+    // declaration, comments or processing instructions (per the loop above),
+    // never document body text, so there is no free-text false-positive risk
+    // the way a whole-document substring search would have.
+    return /^<!doctype/i.test(xml.slice(i, i + 9));
   }
 }
 

@@ -25,6 +25,15 @@ describe('hasDoctype', () => {
   it('returns false for a document with no DOCTYPE at all', () => {
     expect(hasDoctype('<rsm:CrossIndustryInvoice></rsm:CrossIndustryInvoice>')).toBe(false);
   });
+
+  it('detects a miscased doctype keyword too', () => {
+    // Strict XML requires the uppercase keyword, but this is a defense-in-depth
+    // XXE pre-filter — a downstream processor's lenient/recovery mode might
+    // still treat a miscased form as a real doctype declaration, so the guard
+    // must not let it through on a case technicality.
+    expect(hasDoctype('<!doctype foo><rsm:CrossIndustryInvoice/>')).toBe(true);
+    expect(hasDoctype('<!DocType foo><rsm:CrossIndustryInvoice/>')).toBe(true);
+  });
 });
 
 describe('resolveProfile', () => {

@@ -200,6 +200,8 @@ Line-level allowances/charges are also checked arithmetically: `line.lineTotal` 
 
 Every `ram:*Amount` element is serialized without `currencyID` — the invoice's single `currency` is implicit throughout, and the EN 16931 / EXTENDED Schematron rejects the attribute wherever it's redundant ("attribute not used in the given context"). The lone exception is `ram:TaxTotalAmount` (BT-110), which always carries `currencyID` set to that same `currency`: the Schematron's rule for this one element is conditional rather than a flat rejection, and permits `currencyID` when it matches `InvoiceCurrencyCode` — presumably to disambiguate it from an optional second VAT total in a separate accounting currency (BT-111, unsupported here — there's exactly one `currency` per invoice).
 
+This is applied uniformly across all five profiles, but only verified live against the two whose Schematron is bundled (`EN 16931`, `EXTENDED`) — `BASIC`, `BASIC WL` and `MINIMUM` have no bundled rule set to check it against, so their `currencyID` handling is an unverified assumption, not a demonstrated correctness claim.
+
 ## Profiles
 
 | Profile | Status |
@@ -231,9 +233,10 @@ Setting any of these on a non-`EXTENDED` invoice is not an error — same "profi
 
 Known and unaddressed, from a review of the library:
 
-- The XMP conformance gate in the parser rejects `zugferd-invoice.xml` even though attachment extraction accepts it, and the `1.07` version check is exact string equality.
 - Unit prices (BT-146) are serialized at 2 decimals, so `quantity × netPrice` stops reconciling with `lineTotal` for prices carrying more precision.
 - Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
+- `currencyID` handling (see above) is unverified for `BASIC` / `BASIC WL` / `MINIMUM` — no bundled Schematron exists to check it against.
+- `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
 ## XSD validation
 

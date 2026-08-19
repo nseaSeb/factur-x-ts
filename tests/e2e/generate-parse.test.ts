@@ -175,6 +175,38 @@ describe('attachment filename encodings', () => {
   });
 });
 
+describe('zugferd-invoice.xml as the attachment name', () => {
+  it('accepts a PDF whose attachment and XMP both say zugferd-invoice.xml, not just factur-x.xml', async () => {
+    // FACTURX_ATTACHMENT_NAMES accepts both names for the attachment itself
+    // (filespec.ts) — the XMP gate must agree, not hardcode the other one.
+    const pdfBytes = await generate({ invoice: sampleInvoice(), profile: 'EN 16931' });
+    const doc = await PDFDocument.load(pdfBytes);
+
+    const af = doc.catalog.lookupMaybe(PDFName.of('AF'), PDFArray);
+    const spec = af?.lookupMaybe(0, PDFDict);
+    if (!spec) throw new Error('generated PDF has no /AF filespec to rewrite');
+    spec.set(PDFName.of('F'), PDFString.of('zugferd-invoice.xml'));
+    spec.set(PDFName.of('UF'), PDFString.of('zugferd-invoice.xml'));
+
+    const metadataRef = doc.catalog.get(PDFName.of('Metadata'));
+    if (!metadataRef) throw new Error('generated PDF has no /Metadata stream to rewrite');
+    const stream = doc.context.lookup(metadataRef) as PDFRawStream;
+    const xmpText = new TextDecoder('utf-8').decode(decodePDFRawStream(stream).decode());
+    const rewrittenXmp = xmpText.replace(
+      '<fx:DocumentFileName>factur-x.xml</fx:DocumentFileName>',
+      '<fx:DocumentFileName>zugferd-invoice.xml</fx:DocumentFileName>',
+    );
+    expect(rewrittenXmp).not.toBe(xmpText); // guards against the replace silently no-op'ing
+    doc.context.assign(metadataRef, PDFRawStream.of(stream.dict, new TextEncoder().encode(rewrittenXmp)));
+
+    const mutated = await doc.save({ useObjectStreams: false });
+    const result = await parse(mutated);
+
+    expect(result.metadata.documentFileName).toBe('zugferd-invoice.xml');
+    expect(result.invoice.number).toBe('INV-2026-001');
+  });
+});
+
 if (!VERAPDF_AVAILABLE) {
   // eslint-disable-next-line no-console
   console.warn('veraPDF not found on PATH — skipping PDF/A-3b conformance check (round-trip fidelity still verified).');

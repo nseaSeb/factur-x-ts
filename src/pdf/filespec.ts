@@ -9,7 +9,9 @@
 import { PDFDict, PDFHexString, PDFName, PDFString } from 'pdf-lib';
 
 /** Attachment names carrying a Factur-X / ZUGFeRD invoice XML. */
-export const FACTURX_ATTACHMENT_NAMES: readonly string[] = ['factur-x.xml', 'zugferd-invoice.xml'];
+export const FACTURX_ATTACHMENT_NAMES = ['factur-x.xml', 'zugferd-invoice.xml'] as const;
+
+export type FacturXAttachmentName = (typeof FACTURX_ATTACHMENT_NAMES)[number];
 
 /**
  * Filename of a /Filespec dictionary, or undefined if it carries none.
@@ -30,8 +32,12 @@ export function filespecName(fileSpec: PDFDict | undefined): string | undefined 
   return undefined;
 }
 
+/** Narrows an arbitrary string to one of the accepted attachment names. */
+export function isFacturXAttachmentName(name: string | undefined): name is FacturXAttachmentName {
+  return name !== undefined && (FACTURX_ATTACHMENT_NAMES as readonly string[]).includes(name);
+}
+
 /** True when the /Filespec points at a Factur-X invoice XML. */
 export function isFacturXFilespec(fileSpec: PDFDict | undefined): boolean {
-  const name = filespecName(fileSpec);
-  return name !== undefined && FACTURX_ATTACHMENT_NAMES.includes(name);
+  return isFacturXAttachmentName(filespecName(fileSpec));
 }

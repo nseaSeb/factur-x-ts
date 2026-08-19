@@ -6,7 +6,7 @@ import { XMLParser } from 'fast-xml-parser';
 import type { ParseResult } from '../types/index.js';
 import { Profile, type FacturXMetadata } from '../types/profiles.js';
 import { deserialize } from '../xml/deserializer.js';
-import { FACTURX_ATTACHMENT_NAMES, isFacturXFilespec } from './filespec.js';
+import { FACTURX_ATTACHMENT_NAMES, isFacturXAttachmentName, isFacturXFilespec } from './filespec.js';
 
 export class FacturXParseError extends Error {
   constructor(message: string) {
@@ -105,8 +105,14 @@ function extractXmpMetadata(pdfDoc: PDFDocument): FacturXMetadata {
   if (documentType !== 'INVOICE') {
     throw new FacturXParseError(`Unexpected fx:DocumentType: ${documentType ?? '(missing)'}`);
   }
-  if (documentFileName !== 'factur-x.xml') {
-    throw new FacturXParseError(`Unexpected fx:DocumentFileName: ${documentFileName ?? '(missing)'}`);
+  // Was an exact match against 'factur-x.xml' alone — rejected a PDF whose
+  // attachment (and this same XMP field) legitimately says
+  // zugferd-invoice.xml instead, even though extractEmbeddedXml above just
+  // accepted that same PDF via the same FACTURX_ATTACHMENT_NAMES list.
+  if (!isFacturXAttachmentName(documentFileName)) {
+    throw new FacturXParseError(
+      `Unexpected fx:DocumentFileName: ${documentFileName ?? '(missing)'} (expected one of ${FACTURX_ATTACHMENT_NAMES.join(' or ')})`,
+    );
   }
   if (version !== '1.07') {
     throw new FacturXParseError(`Unexpected fx:Version: ${version ?? '(missing)'}`);
@@ -117,7 +123,7 @@ function extractXmpMetadata(pdfDoc: PDFDocument): FacturXMetadata {
 
   return {
     documentType: 'INVOICE',
-    documentFileName: 'factur-x.xml',
+    documentFileName,
     version: '1.07',
     conformanceLevel,
   };

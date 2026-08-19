@@ -2,6 +2,8 @@
 // Factur-X / ZUGFeRD profiles.
 // EN 16931 for the moment
 
+import type { FacturXAttachmentName } from '../pdf/filespec.js';
+
 export const Profile = {
   EN_16931: 'EN 16931',
   EXTENDED: 'EXTENDED',
@@ -34,7 +36,11 @@ export function profileForGuidelineUrn(urn: string): Profile | undefined {
 
 export interface FacturXMetadata {
   readonly documentType: 'INVOICE';
-  readonly documentFileName: 'factur-x.xml';
+  // Whichever accepted name the PDF actually carries — factur-x.xml or
+  // zugferd-invoice.xml, both legal per FACTURX_ATTACHMENT_NAMES. Read back
+  // verbatim, not normalized: normalizing this would misreport what the
+  // producer actually wrote.
+  readonly documentFileName: FacturXAttachmentName;
   readonly version: '1.07';
   readonly conformanceLevel: Profile;
 }
