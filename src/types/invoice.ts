@@ -80,11 +80,19 @@ export interface TradeParty {
 }
 
 export interface PostalAddress {
-  readonly lineOne: string;
+  // Only country is mandatory in the CII schema (ram:TradeAddressType has
+  // no minOccurs on CountryID, minOccurs="0" on everything else) and in
+  // EN 16931's own Schematron (BR-8/BR-10/BR-12 etc. require
+  // ram:PostalTradeAddress/ram:CountryID, never Postcode/LineOne/City) —
+  // confirmed by reading both, not assumed. Requiring the rest
+  // unconditionally would force fabricated data into any invoice built for
+  // a reduced profile, or any third-party document legitimately using
+  // country-only addresses.
+  readonly lineOne?: string;
   readonly lineTwo?: string;
   readonly lineThree?: string;
-  readonly postcode: string;
-  readonly city: string;
+  readonly postcode?: string;
+  readonly city?: string;
   readonly country: string; // ISO 3166-1 alpha-2
 }
 

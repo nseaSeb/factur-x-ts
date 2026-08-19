@@ -24,6 +24,25 @@ describe('serialize', () => {
     expect(xml).not.toMatch(/\d+e[+-]\d+/i);
   });
 
+  it('formats netPrice/grossPrice/priceDiscount at 4 decimals, not 2', () => {
+    // BT-146/BT-147/BT-148 have no Schematron-enforced decimal cap (unlike
+    // the money totals above) — truncating to 2 decimals lost real precision
+    // (a per-liter fuel price, for instance) and broke quantity × netPrice
+    // reconciling with lineTotal for anything more precise than a cent.
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [{ ...base.lines[0]!, netPrice: 10.0006, grossPrice: 12.0007, priceDiscount: 2.0001 }],
+    };
+    const xml = serialize(invoice, 'EN 16931');
+
+    expect(xml).toContain('<ram:NetPriceProductTradePrice><ram:ChargeAmount>10.0006</ram:ChargeAmount></ram:NetPriceProductTradePrice>');
+    expect(xml).toContain('<ram:ChargeAmount>12.0007</ram:ChargeAmount>');
+    expect(xml).toContain('<ram:ActualAmount>2.0001</ram:ActualAmount>');
+    // The line's own monetary total is unaffected — still exactly 2 decimals.
+    expect(xml).toContain('<ram:LineTotalAmount>200.00</ram:LineTotalAmount>');
+  });
+
   it('carries currencyID only on ram:TaxTotalAmount, matching InvoiceCurrencyCode', () => {
     // The EN 16931 Schematron rejects @currencyID on every other ram:*Amount
     // element ("attribute not used in the given context") — it's implicitly
@@ -98,6 +117,21 @@ describe('serialize', () => {
     // like a present-but-blank value.
     const invoice = { ...sampleInvoice(), paymentTerms: '' };
     expect(serialize(invoice, 'EN 16931')).not.toContain('SpecifiedTradePaymentTerms');
+  });
+
+  it('emits a country-only address, omitting the elements not given', () => {
+    // Only ram:CountryID is mandatory in the CII schema and in EN 16931's own
+    // Schematron (BR-8/BR-10/BR-12: PostalTradeAddress/CountryID, never
+    // Postcode/LineOne/City) — confirmed by reading both.
+    const base = sampleInvoice();
+    const invoice = { ...base, buyer: { ...base.buyer, address: { country: 'FR' } } };
+    const xml = serialize(invoice, 'EN 16931');
+
+    const buyer = xml.slice(xml.indexOf('<ram:BuyerTradeParty>'), xml.indexOf('</ram:BuyerTradeParty>'));
+    expect(buyer).toContain('<ram:PostalTradeAddress><ram:CountryID>FR</ram:CountryID></ram:PostalTradeAddress>');
+    expect(buyer).not.toContain('PostcodeCode');
+    expect(buyer).not.toContain('LineOne');
+    expect(buyer).not.toContain('CityName');
   });
 });
 
@@ -426,5 +460,13 @@ describe('serialize + deserialize round-trip', () => {
     expect(roundTripped.lines[0]!.shipTo).toBeUndefined();
     expect(roundTripped.lines[0]!.deliveryDate).toBeUndefined();
     expect(roundTripped.lines[0]!.precedingInvoice).toBeUndefined();
+  });
+
+  it('round-trips a country-only address without fabricating the other fields', () => {
+    const base = sampleInvoice();
+    const invoice = { ...base, buyer: { ...base.buyer, address: { country: 'FR' } } };
+
+    const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+    expect(roundTripped.buyer.address).toEqual({ country: 'FR' });
   });
 });

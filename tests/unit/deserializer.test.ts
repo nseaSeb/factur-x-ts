@@ -84,3 +84,24 @@ describe('deserialize — ram:SpecifiedTradePaymentTerms', () => {
     expect(deserialize(xml).paymentTerms).toBe('First');
   });
 });
+
+describe('deserialize — ram:PostalTradeAddress', () => {
+  it('accepts a party address carrying only ram:CountryID', () => {
+    // Only CountryID is mandatory per the CII schema and EN 16931's own
+    // Schematron — Postcode/LineOne/City are all minOccurs="0".
+    const xml = serialize(sampleInvoice(), 'EN 16931').replace(
+      '<ram:PostcodeCode>69000</ram:PostcodeCode><ram:LineOne>2 avenue des Champs</ram:LineOne><ram:CityName>Lyon</ram:CityName><ram:CountryID>FR</ram:CountryID>',
+      '<ram:CountryID>FR</ram:CountryID>',
+    );
+    const result = deserialize(xml);
+    expect(result.buyer.address).toEqual({ country: 'FR' });
+  });
+
+  it('still throws when ram:CountryID itself is missing', () => {
+    const xml = serialize(sampleInvoice(), 'EN 16931').replace(
+      '<ram:PostcodeCode>69000</ram:PostcodeCode><ram:LineOne>2 avenue des Champs</ram:LineOne><ram:CityName>Lyon</ram:CityName><ram:CountryID>FR</ram:CountryID>',
+      '<ram:PostcodeCode>69000</ram:PostcodeCode><ram:LineOne>2 avenue des Champs</ram:LineOne><ram:CityName>Lyon</ram:CityName>',
+    );
+    expect(() => deserialize(xml)).toThrow(FacturXDeserializeError);
+  });
+});

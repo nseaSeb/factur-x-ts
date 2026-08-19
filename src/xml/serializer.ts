@@ -98,14 +98,14 @@ function buildLineItem(line: LineItem, profile: Profile): string {
     line.grossPrice !== undefined && line.priceDiscount !== undefined
       ? `<ram:AppliedTradeAllowanceCharge>` +
         `<ram:ChargeIndicator>${elIndicator(false)}</ram:ChargeIndicator>` +
-        elAmount('ram:ActualAmount', line.priceDiscount) +
+        elUnitPrice('ram:ActualAmount', line.priceDiscount) +
         `</ram:AppliedTradeAllowanceCharge>`
       : '';
 
   const grossPrice =
     line.grossPrice !== undefined
       ? `<ram:GrossPriceProductTradePrice>` +
-        elAmount('ram:ChargeAmount', line.grossPrice) +
+        elUnitPrice('ram:ChargeAmount', line.grossPrice) +
         priceDiscount +
         `</ram:GrossPriceProductTradePrice>`
       : '';
@@ -131,7 +131,7 @@ function buildLineItem(line: LineItem, profile: Profile): string {
     `<ram:SpecifiedTradeProduct>${el('ram:Name', line.name)}${description}</ram:SpecifiedTradeProduct>` +
     `<ram:SpecifiedLineTradeAgreement>` +
     grossPrice +
-    `<ram:NetPriceProductTradePrice>${elAmount('ram:ChargeAmount', line.netPrice)}</ram:NetPriceProductTradePrice>` +
+    `<ram:NetPriceProductTradePrice>${elUnitPrice('ram:ChargeAmount', line.netPrice)}</ram:NetPriceProductTradePrice>` +
     `</ram:SpecifiedLineTradeAgreement>` +
     `<ram:SpecifiedLineTradeDelivery>` +
     `<ram:BilledQuantity unitCode="${xmlEscape(line.unit)}">${formatQuantity(line.quantity)}</ram:BilledQuantity>` +
@@ -233,11 +233,11 @@ function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: s
   const address = party.address;
   const postalAddress =
     `<ram:PostalTradeAddress>` +
-    el('ram:PostcodeCode', address.postcode) +
-    el('ram:LineOne', address.lineOne) +
+    (address.postcode ? el('ram:PostcodeCode', address.postcode) : '') +
+    (address.lineOne ? el('ram:LineOne', address.lineOne) : '') +
     (address.lineTwo ? el('ram:LineTwo', address.lineTwo) : '') +
     (address.lineThree ? el('ram:LineThree', address.lineThree) : '') +
-    el('ram:CityName', address.city) +
+    (address.city ? el('ram:CityName', address.city) : '') +
     el('ram:CountryID', address.country) +
     `</ram:PostalTradeAddress>`;
 
@@ -425,6 +425,19 @@ function elAmountWithCurrency(tag: string, value: number, currency: string): str
   return `<${tag} currencyID="${xmlEscape(currency)}">${formatAmount(value)}</${tag}>`;
 }
 
+// BT-146/BT-147/BT-148 (netPrice/priceDiscount/grossPrice): udt:AmountType is
+// an unconstrained xs:decimal, and unlike the money totals below (which have
+// explicit 2-decimal Schematron rules, e.g. BasisAmount's
+// string-length(substring-after(...,'.'))<=2), no such rule caps precision
+// on any of these three CII elements — confirmed by reading the EN 16931
+// Schematron, not assumed. Forcing them to 2 decimals like a money total
+// truncates real precision (a per-liter price needing 3-4 decimals is
+// common) and breaks quantity × netPrice reconciling with lineTotal. 4
+// decimals matches formatQuantity's existing precision below.
+function elUnitPrice(tag: string, value: number): string {
+  return `<${tag}>${formatUnitPrice(value)}</${tag}>`;
+}
+
 function elDate102(tag: string, dateTimeStringTag: 'udt:DateTimeString' | 'qdt:DateTimeString', date: Date): string {
   return `<${tag}><${dateTimeStringTag} format="102">${formatDate102(date)}</${dateTimeStringTag}></${tag}>`;
 }
@@ -439,6 +452,10 @@ function formatAmount(value: number): string {
 }
 
 function formatQuantity(value: number): string {
+  return (value + 0).toFixed(4);
+}
+
+function formatUnitPrice(value: number): string {
   return (value + 0).toFixed(4);
 }
 

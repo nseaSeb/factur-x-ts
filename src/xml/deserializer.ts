@@ -366,16 +366,20 @@ function normalizeVatPointDate(breakdown: TaxBreakdown[]): {
 function parseTradeParty(node: ParsedTradeParty): TradeParty {
   if (!node.Name) throw new FacturXDeserializeError('Missing ram:Name in trade party');
   const address = node.PostalTradeAddress;
-  if (!address?.PostcodeCode || !address.LineOne || !address.CityName || !address.CountryID) {
-    throw new FacturXDeserializeError(`Incomplete ram:PostalTradeAddress for ${node.Name}`);
+  // Only CountryID is mandatory in the CII schema and EN 16931's own
+  // Schematron (see PostalAddress in types/invoice.ts) — requiring the rest
+  // here would reject a legitimate reduced-profile or third-party document
+  // that only ever had a country.
+  if (!address?.CountryID) {
+    throw new FacturXDeserializeError(`Missing ram:PostalTradeAddress/ram:CountryID for ${node.Name}`);
   }
 
   const postalAddress: PostalAddress = {
-    lineOne: address.LineOne,
+    ...(address.LineOne ? { lineOne: address.LineOne } : {}),
     ...(address.LineTwo ? { lineTwo: address.LineTwo } : {}),
     ...(address.LineThree ? { lineThree: address.LineThree } : {}),
-    postcode: address.PostcodeCode,
-    city: address.CityName,
+    ...(address.PostcodeCode ? { postcode: address.PostcodeCode } : {}),
+    ...(address.CityName ? { city: address.CityName } : {}),
     country: address.CountryID,
   };
 

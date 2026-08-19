@@ -342,36 +342,38 @@ describe('validateEn16931', () => {
     it('scales the tolerance by magnitude on a negative-quantity credit line, not just Math.max(1, quantity)', () => {
       // A raw `Math.max(1, quantity)` always floors to 1 for any negative
       // quantity, leaving a large-magnitude credit/return line under-tolerated
-      // for the same sub-cent netPrice rounding drift as the positive case.
+      // for the same beyond-4-decimal netPrice rounding drift as the positive
+      // case (netPrice serializes at 4 decimals — see formatUnitPrice in
+      // serializer.ts — so a 6-decimal price still drifts slightly).
       const base = sampleInvoice();
       const invoice = {
         ...base,
-        lines: [{ ...base.lines[0]!, netPrice: 10.005, grossPrice: undefined, priceDiscount: undefined, quantity: -1000, lineTotal: -10005 }],
+        lines: [{ ...base.lines[0]!, netPrice: 10.000567, grossPrice: undefined, priceDiscount: undefined, quantity: -3000, lineTotal: -30001.7 }],
       };
 
       const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
-      expect(roundTripped.lines[0]!.netPrice).toBe(10.01); // same 2-decimal drift as the positive-quantity case
+      expect(roundTripped.lines[0]!.netPrice).toBe(10.0006); // rounded to 4 decimals, not truncated to 2
 
       const result = validateEn16931(roundTripped);
       expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
     });
 
-    it('tolerates the rounding drift from a sub-cent netPrice surviving a serialize/deserialize round-trip', () => {
-      // netPrice is serialized at 2 decimals (BT-146's own documented
-      // limitation, see README). A sub-cent price like 10.005 comes back as
-      // 10.01, so quantity × netPrice drifts from the original lineTotal by
-      // up to ~1 cent per unit — that drift must not itself be flagged.
+    it('tolerates the residual drift from a netPrice with more than 4 decimals surviving a serialize/deserialize round-trip', () => {
+      // netPrice now serializes at 4 decimals (fixed — was 2, see README
+      // history), so a 4-decimal-or-fewer price round-trips exactly. A price
+      // carrying a 5th/6th decimal still drifts slightly; that residual drift
+      // must not itself be flagged.
       const base = sampleInvoice();
       const invoice = {
         ...base,
         allowances: undefined,
-        lines: [{ ...base.lines[0]!, netPrice: 10.005, grossPrice: undefined, priceDiscount: undefined, quantity: 2, lineTotal: 20.01 }],
-        taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 20.01, calculatedAmount: 4 }],
-        totals: { lineTotal: 20.01, taxBasisTotal: 20.01, taxTotal: 4, grandTotal: 24.01, duePayable: 24.01 },
+        lines: [{ ...base.lines[0]!, netPrice: 10.000567, grossPrice: undefined, priceDiscount: undefined, quantity: 3, lineTotal: 30.0 }],
+        taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 30.0, calculatedAmount: 6 }],
+        totals: { lineTotal: 30.0, taxBasisTotal: 30.0, taxTotal: 6, grandTotal: 36.0, duePayable: 36.0 },
       };
 
       const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
-      expect(roundTripped.lines[0]!.netPrice).toBe(10.01); // confirms the drift is really there
+      expect(roundTripped.lines[0]!.netPrice).toBe(10.0006); // confirms the (now much smaller) drift is really there
 
       const result = validateEn16931(roundTripped);
       expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);

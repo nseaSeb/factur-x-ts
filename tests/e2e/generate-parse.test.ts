@@ -155,6 +155,16 @@ describe('code-list validation across profiles', () => {
 
     await expect(generate({ invoice, profile: 'MINIMUM' })).resolves.toBeInstanceOf(Uint8Array);
   });
+
+  it('generates for EN 16931 with a country-only buyer address', async () => {
+    // validateEn16931 only checks address.country, matching the Schematron's
+    // own CountryID-only requirement — this exercises that path end-to-end,
+    // not just serialize()/deserialize() directly.
+    const base = sampleInvoice();
+    const invoice = { ...base, buyer: { ...base.buyer, address: { country: base.buyer.address.country } } };
+
+    await expect(generate({ invoice, profile: 'EN 16931' })).resolves.toBeInstanceOf(Uint8Array);
+  });
 });
 
 describe('attachment filename encodings', () => {

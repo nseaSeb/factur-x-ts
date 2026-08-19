@@ -202,6 +202,14 @@ Every `ram:*Amount` element is serialized without `currencyID` — the invoice's
 
 This is applied uniformly across all five profiles, but only verified live against the two whose Schematron is bundled (`EN 16931`, `EXTENDED`) — `BASIC`, `BASIC WL` and `MINIMUM` have no bundled rule set to check it against, so their `currencyID` handling is an unverified assumption, not a demonstrated correctness claim.
 
+## Unit prices keep their own precision
+
+`line.netPrice`, `line.grossPrice` and `line.priceDiscount` (BT-146/BT-148/BT-147) serialize at 4 decimals, not the 2 decimals every money total uses — `udt:AmountType` is an unconstrained `xs:decimal` and, unlike the totals, no EN 16931 Schematron rule caps their precision. A price needing more resolution than a cent (a per-liter fuel price, for instance) survives a `generate` → `parse` round-trip, and `quantity × netPrice` reconciles with `lineTotal` (within a small tolerance scaled to `quantity`, absorbing whatever residual rounding a price with more than 4 decimals still carries).
+
+## Only country is mandatory in a `PostalAddress`
+
+`lineOne`, `postcode` and `city` are optional — `country` is the only field `ram:TradeAddressType` requires at the XSD level, and the only one EN 16931's own Schematron mandates (`ram:PostalTradeAddress/ram:CountryID`, checked directly, not assumed). `serialize` omits whichever fields aren't given rather than emitting empty elements, and `deserialize` only throws for a missing `ram:CountryID` — a country-only address (common for a reduced profile, or a third-party document that never had more) round-trips as-is instead of being rejected or forced to carry fabricated data.
+
 ## Profiles
 
 | Profile | Status |
@@ -231,10 +239,8 @@ Setting any of these on a non-`EXTENDED` invoice is not an error — same "profi
 
 ## Limitations
 
-Known and unaddressed, from a review of the library:
+Left as-is, either unverifiable or deliberate — not correctness bugs:
 
-- Unit prices (BT-146) are serialized at 2 decimals, so `quantity × netPrice` stops reconciling with `lineTotal` for prices carrying more precision.
-- Address fields are required unconditionally, which contradicts the reduced profiles the parser accepts.
 - `currencyID` handling (see above) is unverified for `BASIC` / `BASIC WL` / `MINIMUM` — no bundled Schematron exists to check it against.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
