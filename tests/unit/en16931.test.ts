@@ -267,6 +267,20 @@ describe('validateEn16931', () => {
       expect(validateEn16931(invoice).errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(false);
     });
 
+    it('does not require either field when duePayable is a float-noise epsilon above zero', () => {
+      // grandTotal - prepaid landing on a tiny positive float instead of exact
+      // 0 must count as "not positive" here the same way isClose treats it as
+      // zero elsewhere in this file — a raw `duePayable <= 0` check would
+      // disagree and raise a spurious BR-CO-25 error on a fully-paid invoice.
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        paymentTerms: undefined,
+        totals: { ...base.totals, prepaid: base.totals.grandTotal - 3e-15, duePayable: 3e-15 },
+      };
+      expect(validateEn16931(invoice).errors.some((e) => e.code === 'MISSING_PAYMENT_TERMS')).toBe(false);
+    });
+
     it('rejects an empty-string paymentTerms as if it were absent', () => {
       // An empty paymentTerms fails BR-CO-25 on the wire too: buildPaymentTerms
       // only emits ram:Description for a non-empty string, so the two must agree.
@@ -325,6 +339,23 @@ describe('validateEn16931', () => {
       expect(result.errors.some((e) => e.field === 'lines[0].lineTotal' && e.code === 'AMOUNT_MISMATCH')).toBe(true);
     });
 
+    it('scales the tolerance by magnitude on a negative-quantity credit line, not just Math.max(1, quantity)', () => {
+      // A raw `Math.max(1, quantity)` always floors to 1 for any negative
+      // quantity, leaving a large-magnitude credit/return line under-tolerated
+      // for the same sub-cent netPrice rounding drift as the positive case.
+      const base = sampleInvoice();
+      const invoice = {
+        ...base,
+        lines: [{ ...base.lines[0]!, netPrice: 10.005, grossPrice: undefined, priceDiscount: undefined, quantity: -1000, lineTotal: -10005 }],
+      };
+
+      const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
+      expect(roundTripped.lines[0]!.netPrice).toBe(10.01); // same 2-decimal drift as the positive-quantity case
+
+      const result = validateEn16931(roundTripped);
+      expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
+    });
+
     it('tolerates the rounding drift from a sub-cent netPrice surviving a serialize/deserialize round-trip', () => {
       // netPrice is serialized at 2 decimals (BT-146's own documented
       // limitation, see README). A sub-cent price like 10.005 comes back as
@@ -364,5 +395,33 @@ describe('validateEn16931', () => {
 
     const result = validateEn16931(invoice);
     expect(result.errors.some((e) => e.field === 'totals.lineTotal')).toBe(false);
+  });
+
+  it('does not misreport a mismatch when a subtraction chain lands on negative-epsilon instead of exact zero', () => {
+    // lineTotal - allowanceTotal + chargeTotal = 0.02 - 0.05 + 0.03, which is
+    // mathematically exactly 0 but evaluates to -3.469e-18 in IEEE 754 float.
+    // (-3.469e-18).toFixed(2) is the string "-0.00", not "0.00" — even though
+    // (-0).toFixed(2) IS "0.00" — so a naive toFixed comparison against an
+    // exact 0 would report a false AMOUNT_MISMATCH on taxBasisTotal (BR-CO-13).
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      lines: [{ ...base.lines[0]!, netPrice: 0.02, quantity: 1, lineTotal: 0.02 }],
+      allowances: [{ amount: 0.05, vatCategory: 'S' as const, vatRate: 20 }],
+      charges: [{ amount: 0.03, vatCategory: 'S' as const, vatRate: 20 }],
+      taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 0, calculatedAmount: 0 }],
+      totals: {
+        lineTotal: 0.02,
+        allowanceTotal: 0.05,
+        chargeTotal: 0.03,
+        taxBasisTotal: 0.02 - 0.05 + 0.03,
+        taxTotal: 0,
+        grandTotal: 0.02 - 0.05 + 0.03,
+        duePayable: 0.02 - 0.05 + 0.03,
+      },
+    };
+
+    const result = validateEn16931(invoice);
+    expect(result.errors.some((e) => e.field === 'totals.taxBasisTotal')).toBe(false);
   });
 });

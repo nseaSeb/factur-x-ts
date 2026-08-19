@@ -171,7 +171,10 @@ function validateLine(line: LineItem, index: number, errors: ValidationError[]):
   const allowanceSum = (line.allowances ?? []).reduce((sum, ac) => sum + ac.amount, 0);
   const chargeSum = (line.charges ?? []).reduce((sum, ac) => sum + ac.amount, 0);
   const expectedLineTotal = line.netPrice * line.quantity - allowanceSum + chargeSum;
-  const lineTotalTolerance = 0.01 * Math.max(1, line.quantity);
+  // Math.abs, not the raw signed quantity: a credit/return line legitimately
+  // carries a negative quantity, and Math.max(1, <negative>) would otherwise
+  // always floor to 1 regardless of the line's real magnitude.
+  const lineTotalTolerance = 0.01 * Math.max(1, Math.abs(line.quantity));
   if (Math.abs(expectedLineTotal - line.lineTotal) > lineTotalTolerance) {
     errors.push(
       field(
@@ -299,8 +302,21 @@ function validateAllowanceChargeTotal(
 // that: round each side to 2 decimals the same way the wire format does
 // (`toFixed`, not `Math.round(x * 100)`, which misrounds values like 1.005
 // due to float representation) and compare exactly.
+//
+// One float trap toFixed doesn't save you from: a subtraction/addition chain
+// (e.g. lineTotal - allowanceTotal + chargeTotal) that is mathematically
+// exactly zero can land on a tiny negative float instead (-3.469e-18, not
+// -0), and (-3.469e-18).toFixed(2) is the string "-0.00" — not "0.00", even
+// though (-0).toFixed(2) IS "0.00". Snapping anything far below cent
+// precision to exact 0 first avoids that false mismatch without masking any
+// real one (a genuine difference is always >= 0.005, twelve orders of
+// magnitude above the snap threshold).
+function snapNearZero(value: number): number {
+  return Math.abs(value) < 1e-9 ? 0 : value;
+}
+
 function isClose(a: number, b: number): boolean {
-  return a.toFixed(2) === b.toFixed(2);
+  return snapNearZero(a).toFixed(2) === snapNearZero(b).toFixed(2);
 }
 
 function round2(value: number): number {
@@ -311,7 +327,11 @@ function round2(value: number): number {
 // but the underlying CII field and rounded-total semantics are shared, so
 // checking it universally here is still correct — never a false positive).
 function validatePaymentTerms(invoice: FacturXInvoice, errors: ValidationError[]): void {
-  if (invoice.totals.duePayable <= 0) return;
+  // snapNearZero, not a raw <= 0: duePayable is often itself a subtraction
+  // (grandTotal - prepaid) and can land on a tiny positive float instead of
+  // exact 0 — that must count as "not positive" here the same way isClose
+  // treats it as zero elsewhere, or the two disagree on the same invoice.
+  if (snapNearZero(invoice.totals.duePayable) <= 0) return;
   // Truthy, not just !== undefined: buildPaymentTerms only emits ram:Description
   // for a non-empty string, so an empty paymentTerms would pass here but leave
   // the wire XML without a ram:Description for BR-CO-25's own XPath to find.

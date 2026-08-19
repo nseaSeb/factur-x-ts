@@ -180,7 +180,7 @@ interface ParsedHeaderTradeSettlement {
   readonly ApplicableTradeTax?: readonly ParsedTradeTax[];
   readonly BillingSpecifiedPeriod?: ParsedBillingPeriod;
   readonly SpecifiedTradeAllowanceCharge?: readonly ParsedAllowanceCharge[];
-  readonly SpecifiedTradePaymentTerms?: ParsedPaymentTerms;
+  readonly SpecifiedTradePaymentTerms?: readonly ParsedPaymentTerms[];
   readonly SpecifiedTradeSettlementHeaderMonetarySummation?: ParsedMonetarySummation;
   readonly InvoiceReferencedDocument?: readonly ParsedReferencedDocument[];
 }
@@ -219,6 +219,12 @@ const ARRAY_PATHS = new Set<string>([
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.ApplicableTradeTax',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.InvoiceReferencedDocument',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.SpecifiedTradeAllowanceCharge',
+  // EXTENDED's XSD (unlike EN 16931's) declares maxOccurs="unbounded" here,
+  // for repeated installment terms; this library's model only carries one
+  // paymentTerms/paymentDueDate pair, so a multi-instance document has its
+  // first entry read (see below) rather than silently losing the field to
+  // fast-xml-parser's non-array-by-default property access on an array.
+  'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.SpecifiedTradePaymentTerms',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.IncludedSupplyChainTradeLineItem.SpecifiedLineTradeSettlement.SpecifiedTradeAllowanceCharge',
 ]);
 
@@ -274,8 +280,11 @@ export function deserialize(xml: string): FacturXInvoice {
   const billingPeriod = settlement.BillingSpecifiedPeriod
     ? parseBillingPeriod(settlement.BillingSpecifiedPeriod)
     : undefined;
-  const paymentTerms = settlement.SpecifiedTradePaymentTerms?.Description;
-  const paymentDueDateText = textOf(settlement.SpecifiedTradePaymentTerms?.DueDateDateTime?.DateTimeString);
+  // Only the first entry is read (see the ARRAY_PATHS comment above) — this
+  // library's model has no way to represent more than one.
+  const paymentTermsNode = settlement.SpecifiedTradePaymentTerms?.[0];
+  const paymentTerms = paymentTermsNode?.Description;
+  const paymentDueDateText = textOf(paymentTermsNode?.DueDateDateTime?.DateTimeString);
 
   // Document-level BG-20/BG-21, split on the same ChargeIndicator predicate the
   // line-level groups use.
@@ -616,6 +625,12 @@ function parseDate102(text: string): Date {
   const year = Number(text.slice(0, 4));
   const month = Number(text.slice(4, 6));
   const day = Number(text.slice(6, 8));
+  // Same NaN class as requireNumber guards elsewhere: malformed date text
+  // (too short, non-digit) must fail loudly rather than silently produce an
+  // Invalid Date that only surfaces much later, on first use.
+  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) {
+    throw new FacturXDeserializeError(`Invalid date (expected YYYYMMDD): "${text}"`);
+  }
   return new Date(Date.UTC(year, month - 1, day));
 }
 

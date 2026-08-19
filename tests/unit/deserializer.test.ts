@@ -67,4 +67,20 @@ describe('deserialize — ram:SpecifiedTradePaymentTerms', () => {
     expect(result).not.toHaveProperty('paymentTerms');
     expect(result).not.toHaveProperty('paymentDueDate');
   });
+
+  it('reads the first entry, not undefined, when a third-party EXTENDED document repeats the group', () => {
+    // EXTENDED's XSD declares maxOccurs="unbounded" here (repeated installment
+    // terms), which fast-xml-parser only returns as an array when told to —
+    // this library's own serializer never emits more than one, so this can
+    // only be exercised with hand-crafted XML standing in for a third party.
+    const base = serialize(sampleInvoice(), 'EN 16931');
+    const xml = base.replace(
+      '<ram:SpecifiedTradePaymentTerms><ram:Description>30 jours net</ram:Description></ram:SpecifiedTradePaymentTerms>',
+      '<ram:SpecifiedTradePaymentTerms><ram:Description>First</ram:Description></ram:SpecifiedTradePaymentTerms>' +
+        '<ram:SpecifiedTradePaymentTerms><ram:Description>Second</ram:Description></ram:SpecifiedTradePaymentTerms>',
+    );
+    expect(xml).not.toBe(base); // guards against the replace silently no-op'ing
+
+    expect(deserialize(xml).paymentTerms).toBe('First');
+  });
 });
