@@ -71,13 +71,19 @@ export function validateEn16931(invoice: FacturXInvoice, options: ValidationOpti
   if (invoice.seller.name.trim() === '') {
     errors.push(field('seller.name', 'EMPTY_VALUE', 'Seller name (BT-27) must not be empty'));
   }
-  if (invoice.seller.address.country.trim() === '') {
+  // BG-5 / BG-8 are optional on the model — MINIMUM has no buyer address —
+  // but both are required at EN 16931 (BR-08 / BR-10).
+  if (invoice.seller.address === undefined) {
+    errors.push(field('seller.address', 'MISSING_FIELD', 'Seller postal address (BG-5) is required (BR-08)'));
+  } else if (invoice.seller.address.country.trim() === '') {
     errors.push(field('seller.address.country', 'EMPTY_VALUE', 'Seller country (BT-40) must not be empty'));
   }
   if (invoice.buyer.name.trim() === '') {
     errors.push(field('buyer.name', 'EMPTY_VALUE', 'Buyer name (BT-44) must not be empty'));
   }
-  if (invoice.buyer.address.country.trim() === '') {
+  if (invoice.buyer.address === undefined) {
+    errors.push(field('buyer.address', 'MISSING_FIELD', 'Buyer postal address (BG-8) is required (BR-10)'));
+  } else if (invoice.buyer.address.country.trim() === '') {
     errors.push(field('buyer.address.country', 'EMPTY_VALUE', 'Buyer country (BT-55) must not be empty'));
   }
 
@@ -240,16 +246,24 @@ function validateTaxBreakdownCoversLines(invoice: FacturXInvoice, errors: Valida
 function validateAmounts(invoice: FacturXInvoice, errors: ValidationError[]): void {
   const { totals } = invoice;
 
-  const lineTotalSum = invoice.lines.reduce((sum, line) => sum + line.lineTotal, 0);
-  if (!isClose(lineTotalSum, totals.lineTotal)) {
-    errors.push(
-      field('totals.lineTotal', 'AMOUNT_MISMATCH', `Sum of line totals (${lineTotalSum.toFixed(2)}) does not match totals.lineTotal (BR-CO-10)`),
-    );
-  }
+  // BT-106 is optional on the model because MINIMUM has no such element; at
+  // EN 16931 it is mandatory, and the two sums built on it are skipped rather
+  // than reported as mismatches against a figure that is simply absent.
+  const { lineTotal } = totals;
+  if (lineTotal === undefined) {
+    errors.push(field('totals.lineTotal', 'MISSING_FIELD', 'totals.lineTotal (BT-106) is required (BR-CO-10)'));
+  } else {
+    const lineTotalSum = invoice.lines.reduce((sum, line) => sum + line.lineTotal, 0);
+    if (!isClose(lineTotalSum, lineTotal)) {
+      errors.push(
+        field('totals.lineTotal', 'AMOUNT_MISMATCH', `Sum of line totals (${lineTotalSum.toFixed(2)}) does not match totals.lineTotal (BR-CO-10)`),
+      );
+    }
 
-  const expectedTaxBasisTotal = totals.lineTotal - (totals.allowanceTotal ?? 0) + (totals.chargeTotal ?? 0);
-  if (!isClose(expectedTaxBasisTotal, totals.taxBasisTotal)) {
-    errors.push(field('totals.taxBasisTotal', 'AMOUNT_MISMATCH', 'taxBasisTotal must equal lineTotal - allowanceTotal + chargeTotal (BR-CO-13)'));
+    const expectedTaxBasisTotal = lineTotal - (totals.allowanceTotal ?? 0) + (totals.chargeTotal ?? 0);
+    if (!isClose(expectedTaxBasisTotal, totals.taxBasisTotal)) {
+      errors.push(field('totals.taxBasisTotal', 'AMOUNT_MISMATCH', 'taxBasisTotal must equal lineTotal - allowanceTotal + chargeTotal (BR-CO-13)'));
+    }
   }
 
   // BT-107/BT-108 are the sums of the document-level BG-20/BG-21 groups. Without

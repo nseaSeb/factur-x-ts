@@ -1,6 +1,5 @@
 // src/types/profiles.ts
 // Factur-X / ZUGFeRD profiles.
-// EN 16931 for the moment
 
 import type { FacturXAttachmentName } from '../pdf/filespec.js';
 
@@ -23,6 +22,27 @@ export const GUIDELINE_URN: Record<Profile, string> = {
   'EN 16931': 'urn:cen.eu:en16931:2017',
   EXTENDED: 'urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended',
 };
+
+// The five profiles are strictly nested: every element name the MINIMUM schema
+// declares is in BASIC WL, and so on up to EXTENDED. That is what lets a single
+// ordering decide what the serializer may emit, instead of one predicate per
+// profile per element.
+//
+// Nesting holds for element *names*, not for where they may appear: BASIC WL
+// allows ram:ApplicableTradeTax at header level only, BASIC also at line level.
+// So the floor belongs on the emitter, never on the element.
+const PROFILE_RANK: Record<Profile, number> = {
+  MINIMUM: 0,
+  'BASIC WL': 1,
+  BASIC: 2,
+  'EN 16931': 3,
+  EXTENDED: 4,
+};
+
+/** Whether `profile` is `floor` or richer. */
+export function atLeast(profile: Profile, floor: Profile): boolean {
+  return PROFILE_RANK[profile] >= PROFILE_RANK[floor];
+}
 
 const PROFILE_BY_GUIDELINE_URN: ReadonlyMap<string, Profile> = new Map(
   Object.entries(GUIDELINE_URN).map(([profile, urn]) => [urn, profile as Profile]),

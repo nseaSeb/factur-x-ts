@@ -12,7 +12,7 @@ import type {
   Note,
 } from '../types/invoice.js';
 import type { Profile } from '../types/profiles.js';
-import { GUIDELINE_URN } from '../types/profiles.js';
+import { atLeast, GUIDELINE_URN } from '../types/profiles.js';
 
 export class FacturXSerializeError extends Error {
   constructor(message: string) {
@@ -32,7 +32,7 @@ export function serialize(invoice: FacturXInvoice, profile: Profile): string {
     `xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100" ` +
     `xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:100">` +
     buildExchangedDocumentContext(invoice, profile) +
-    buildExchangedDocument(invoice) +
+    buildExchangedDocument(invoice, profile) +
     buildSupplyChainTradeTransaction(invoice, currency, profile) +
     `</rsm:CrossIndustryInvoice>`;
 
@@ -58,8 +58,10 @@ function buildExchangedDocumentContext(invoice: FacturXInvoice, profile: Profile
 
 // ---- ExchangedDocument ----
 
-function buildExchangedDocument(invoice: FacturXInvoice): string {
-  const notes = (invoice.notes ?? []).map(buildNote).join('');
+// BG-1 starts at BASIC WL: ExchangedDocumentType has no ram:IncludedNote in
+// MINIMUM's schema, so a note there is an XSD error, not a business-rule one.
+function buildExchangedDocument(invoice: FacturXInvoice, profile: Profile): string {
+  const notes = atLeast(profile, 'BASIC WL') ? (invoice.notes ?? []).map(buildNote).join('') : '';
 
   return (
     `<rsm:ExchangedDocument>` +
@@ -79,14 +81,24 @@ function buildNote(note: Note): string {
 // ---- SupplyChainTradeTransaction ----
 
 function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: string, profile: Profile): string {
-  const lineItems = invoice.lines.map((line) => buildLineItem(line, profile)).join('');
+  // MINIMUM and BASIC WL have no ram:IncludedSupplyChainTradeLineItem at all —
+  // "WL" is *without lines*. What the lines carried is simply not emitted; the
+  // header totals still are, which is the whole point of those two profiles.
+  const lineItems = atLeast(profile, 'BASIC')
+    ? invoice.lines.map((line) => buildLineItem(line, profile)).join('')
+    : '';
 
   return (
     `<rsm:SupplyChainTradeTransaction>` +
     lineItems +
-    buildApplicableHeaderTradeAgreement(invoice) +
+    buildApplicableHeaderTradeAgreement(invoice, profile) +
+    // HeaderTradeDeliveryType is an *empty* complexType in MINIMUM: the element
+    // is still required, with nothing inside it. Nothing this library models
+    // goes in it at any profile yet — BG-13 (ship-to) and BT-72 (delivery date)
+    // are header fields FacturXInvoice does not carry. When they arrive, their
+    // floor is BASIC WL.
     `<ram:ApplicableHeaderTradeDelivery/>` +
-    buildApplicableHeaderTradeSettlement(invoice, currency) +
+    buildApplicableHeaderTradeSettlement(invoice, currency, profile) +
     `</rsm:SupplyChainTradeTransaction>`
   );
 }
@@ -117,13 +129,13 @@ function buildLineItem(line: LineItem, profile: Profile): string {
 
   const description = line.description ? el('ram:Description', line.description) : '';
 
-  const shipTo = profile === 'EXTENDED' && line.shipTo ? buildTradeParty(line.shipTo, 'ram:ShipToTradeParty') : '';
+  const extended = atLeast(profile, 'EXTENDED');
+  const shipTo = extended && line.shipTo ? buildTradeParty(line.shipTo, 'ram:ShipToTradeParty', profile) : '';
   const deliveryEvent =
-    profile === 'EXTENDED' && line.deliveryDate !== undefined
+    extended && line.deliveryDate !== undefined
       ? `<ram:ActualDeliverySupplyChainEvent>${elDate102('ram:OccurrenceDateTime', 'udt:DateTimeString', line.deliveryDate)}</ram:ActualDeliverySupplyChainEvent>`
       : '';
-  const linePrecedingInvoice =
-    profile === 'EXTENDED' && line.precedingInvoice ? buildPrecedingInvoice(line.precedingInvoice) : '';
+  const linePrecedingInvoice = extended && line.precedingInvoice ? buildPrecedingInvoice(line.precedingInvoice) : '';
 
   return (
     `<ram:IncludedSupplyChainTradeLineItem>` +
@@ -166,7 +178,7 @@ function buildLineItem(line: LineItem, profile: Profile): string {
 // (Facturx.CII.line_notes/2).
 function buildLineNotes(line: LineItem, profile: Profile): string {
   const withContent = (line.notes ?? []).filter((n) => n.content.trim() !== '');
-  if (profile === 'EXTENDED') return withContent.map(buildNote).join('');
+  if (atLeast(profile, 'EXTENDED')) return withContent.map(buildNote).join('');
 
   const first = withContent[0];
   return first ? `<ram:IncludedNote>${el('ram:Content', first.content)}</ram:IncludedNote>` : '';
@@ -197,15 +209,17 @@ function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean): stri
 
 // ---- ApplicableHeaderTradeAgreement ----
 
-function buildApplicableHeaderTradeAgreement(invoice: FacturXInvoice): string {
-  const taxRepresentative = invoice.taxRepresentative
-    ? buildTradeParty(invoice.taxRepresentative, 'ram:SellerTaxRepresentativeTradeParty')
-    : '';
+function buildApplicableHeaderTradeAgreement(invoice: FacturXInvoice, profile: Profile): string {
+  // BG-11 starts at BASIC WL: MINIMUM has no SellerTaxRepresentativeTradeParty.
+  const taxRepresentative =
+    invoice.taxRepresentative && atLeast(profile, 'BASIC WL')
+      ? buildTradeParty(invoice.taxRepresentative, 'ram:SellerTaxRepresentativeTradeParty', profile)
+      : '';
 
   return (
     `<ram:ApplicableHeaderTradeAgreement>` +
-    buildTradeParty(invoice.seller, 'ram:SellerTradeParty', SELLER_GLOBAL_ID_SCHEME) +
-    buildTradeParty(invoice.buyer, 'ram:BuyerTradeParty') +
+    buildTradeParty(invoice.seller, 'ram:SellerTradeParty', profile, SELLER_GLOBAL_ID_SCHEME) +
+    buildTradeParty(invoice.buyer, 'ram:BuyerTradeParty', profile) +
     // CII sequence: SellerTaxRepresentativeTradeParty follows BuyerTradeParty.
     taxRepresentative +
     `</ram:ApplicableHeaderTradeAgreement>`
@@ -217,8 +231,19 @@ const LEGAL_ID_SCHEME = '0002';
 /** BT-29d-1 — French VAT group (assujetti unique). Seller only, per the annexe. */
 const SELLER_GLOBAL_ID_SCHEME = '0231';
 
-function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: string): string {
-  const contact = party.contact
+// MINIMUM's TradePartyType has neither GlobalID nor DefinedTradeContact, and
+// its TradeAddressType is the country and nothing else. The address (BG-5) and
+// the tax registration also belong to the seller alone there: BR-08 / BR-09
+// require the seller's, and the buyer's is refused. The XSD cannot express that
+// — it types every party alike — so only the Schematron catches it, which is
+// why a realistic invoice has to go in front of it before a profile is called
+// done.
+function buildTradeParty(party: TradeParty, tag: string, profile: Profile, defaultGlobalScheme?: string): string {
+  const wl = atLeast(profile, 'BASIC WL');
+  const addressable = wl || tag === 'ram:SellerTradeParty';
+
+  const contact =
+    party.contact && atLeast(profile, 'EN 16931')
     ? `<ram:DefinedTradeContact>` +
       (party.contact.name ? el('ram:PersonName', party.contact.name) : '') +
       (party.contact.phone
@@ -232,24 +257,27 @@ function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: s
 
   const address = party.address;
   const postalAddress =
-    `<ram:PostalTradeAddress>` +
-    (address.postcode ? el('ram:PostcodeCode', address.postcode) : '') +
-    (address.lineOne ? el('ram:LineOne', address.lineOne) : '') +
-    (address.lineTwo ? el('ram:LineTwo', address.lineTwo) : '') +
-    (address.lineThree ? el('ram:LineThree', address.lineThree) : '') +
-    (address.city ? el('ram:CityName', address.city) : '') +
-    el('ram:CountryID', address.country) +
-    `</ram:PostalTradeAddress>`;
-
-  const taxRegistration = party.vatId
-    ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(party.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>`
+    addressable && address
+    ? `<ram:PostalTradeAddress>` +
+      (wl && address.postcode ? el('ram:PostcodeCode', address.postcode) : '') +
+      (wl && address.lineOne ? el('ram:LineOne', address.lineOne) : '') +
+      (wl && address.lineTwo ? el('ram:LineTwo', address.lineTwo) : '') +
+      (wl && address.lineThree ? el('ram:LineThree', address.lineThree) : '') +
+      (wl && address.city ? el('ram:CityName', address.city) : '') +
+      el('ram:CountryID', address.country) +
+      `</ram:PostalTradeAddress>`
     : '';
+
+  const taxRegistration =
+    party.vatId && addressable
+      ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(party.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>`
+      : '';
 
   // TradePartyType sequence: GlobalID, Name, SpecifiedLegalOrganization,
   // DefinedTradeContact, PostalTradeAddress, SpecifiedTaxRegistration.
   const globalScheme = party.globalScheme ?? defaultGlobalScheme;
   const globalId =
-    party.globalId !== undefined
+    party.globalId !== undefined && wl
       ? `<ram:GlobalID${globalScheme !== undefined ? ` schemeID="${xmlEscape(globalScheme)}"` : ''}>${xmlEscape(party.globalId)}</ram:GlobalID>`
       : '';
 
@@ -265,8 +293,22 @@ function buildTradeParty(party: TradeParty, tag: string, defaultGlobalScheme?: s
 
 // ---- ApplicableHeaderTradeSettlement ----
 
-function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency: string): string {
-  const paymentMeans = (invoice.paymentMeans ?? []).map(buildPaymentMeans).join('');
+function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency: string, profile: Profile): string {
+  // MINIMUM's HeaderTradeSettlementType holds two children and no more:
+  // InvoiceCurrencyCode and the summation. Not even ram:ApplicableTradeTax —
+  // which is why a MINIMUM document cannot carry BG-23, and is an accounting
+  // aid rather than an invoice under the French mandate. BT-8 goes with it:
+  // it lives inside ram:ApplicableTradeTax and has nowhere else to sit.
+  if (!atLeast(profile, 'BASIC WL')) {
+    return (
+      `<ram:ApplicableHeaderTradeSettlement>` +
+      el('ram:InvoiceCurrencyCode', currency) +
+      buildMonetarySummation(invoice.totals, currency, profile) +
+      `</ram:ApplicableHeaderTradeSettlement>`
+    );
+  }
+
+  const paymentMeans = (invoice.paymentMeans ?? []).map((pm) => buildPaymentMeans(pm, profile)).join('');
   const taxes = invoice.taxBreakdown
     .map((tb) => buildTradeTax(tb, invoice.taxDueDateTypeCode))
     .join('');
@@ -298,7 +340,7 @@ function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency:
     // Order is schema-significant and no XSD check runs here — do not reorder.
     allowancesCharges +
     paymentTerms +
-    buildMonetarySummation(invoice.totals, currency) +
+    buildMonetarySummation(invoice.totals, currency, profile) +
     precedingInvoices +
     `</ram:ApplicableHeaderTradeSettlement>`
   );
@@ -324,8 +366,16 @@ function buildPaymentTerms(invoice: FacturXInvoice): string {
   return `<ram:SpecifiedTradePaymentTerms>${description}${dueDate}</ram:SpecifiedTradePaymentTerms>`;
 }
 
-function buildPaymentMeans(pm: PaymentMean): string {
-  const card = pm.cardId
+// Three of this element's children start at EN 16931: BG-18 (the card), BT-85
+// (AccountName) and BT-86 (the BIC). BASIC and BASIC WL carry the account
+// without the institution. BT-82 (Information) and BT-84's non-IBAN form
+// (ram:ProprietaryID) also start at EN 16931 and BASIC respectively, but
+// PaymentMean models neither yet.
+function buildPaymentMeans(pm: PaymentMean, profile: Profile): string {
+  const en = atLeast(profile, 'EN 16931');
+
+  const card =
+    pm.cardId && en
     ? `<ram:ApplicableTradeSettlementFinancialCard>` +
       el('ram:ID', pm.cardId) +
       (pm.cardholderName ? el('ram:CardholderName', pm.cardholderName) : '') +
@@ -339,11 +389,12 @@ function buildPaymentMeans(pm: PaymentMean): string {
   const payeeAccount = pm.iban
     ? `<ram:PayeePartyCreditorFinancialAccount>` +
       el('ram:IBANID', pm.iban) +
-      (pm.accountName ? el('ram:AccountName', pm.accountName) : '') +
+      (pm.accountName && en ? el('ram:AccountName', pm.accountName) : '') +
       `</ram:PayeePartyCreditorFinancialAccount>`
     : '';
 
-  const payeeInstitution = pm.bic
+  const payeeInstitution =
+    pm.bic && en
     ? `<ram:PayeeSpecifiedCreditorFinancialInstitution>${el('ram:BICID', pm.bic)}</ram:PayeeSpecifiedCreditorFinancialInstitution>`
     : '';
 
@@ -379,15 +430,22 @@ function buildTradeTax(tb: TaxBreakdown, invoiceTaxDueDateTypeCode: string | und
   );
 }
 
-function buildMonetarySummation(totals: FacturXInvoice['totals'], currency: string): string {
-  const chargeTotal = totals.chargeTotal !== undefined ? elAmount('ram:ChargeTotalAmount', totals.chargeTotal) : '';
+// MINIMUM keeps four of the ten: the taxable basis, the tax, the grand total
+// and what is due. BT-114 (ram:RoundingAmount) would start at EN 16931, but
+// MonetaryTotals has no field for it yet.
+function buildMonetarySummation(totals: FacturXInvoice['totals'], currency: string, profile: Profile): string {
+  const wl = atLeast(profile, 'BASIC WL');
+  const lineTotal =
+    wl && totals.lineTotal !== undefined ? elAmount('ram:LineTotalAmount', totals.lineTotal) : '';
+  const chargeTotal =
+    wl && totals.chargeTotal !== undefined ? elAmount('ram:ChargeTotalAmount', totals.chargeTotal) : '';
   const allowanceTotal =
-    totals.allowanceTotal !== undefined ? elAmount('ram:AllowanceTotalAmount', totals.allowanceTotal) : '';
-  const prepaid = totals.prepaid !== undefined ? elAmount('ram:TotalPrepaidAmount', totals.prepaid) : '';
+    wl && totals.allowanceTotal !== undefined ? elAmount('ram:AllowanceTotalAmount', totals.allowanceTotal) : '';
+  const prepaid = wl && totals.prepaid !== undefined ? elAmount('ram:TotalPrepaidAmount', totals.prepaid) : '';
 
   return (
     `<ram:SpecifiedTradeSettlementHeaderMonetarySummation>` +
-    elAmount('ram:LineTotalAmount', totals.lineTotal) +
+    lineTotal +
     chargeTotal +
     allowanceTotal +
     elAmount('ram:TaxBasisTotalAmount', totals.taxBasisTotal) +

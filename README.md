@@ -4,7 +4,7 @@ TypeScript-native [Factur-X](https://fnfe-mpe.org/factur-x/) generator and parse
 
 Strictly typed, no `any`. Two runtime dependencies: [`pdf-lib`](https://github.com/Hopding/pdf-lib) and [`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser).
 
-> **Status: 0.1.0, pre-release.** Not published to npm yet. `EN 16931` is implemented and validated; `EXTENDED` adds the French line extensions on top of it; `BASIC` / `BASIC WL` / `MINIMUM` are guideline-URN only. See [Limitations](#limitations) before using this for real invoicing.
+> **Status: 0.2.0, pre-release.** Not published to npm yet. All five profiles are built, each validated against its own XSD and its own Schematron rule set. See [Limitations](#limitations) before using this for real invoicing.
 
 ## Install
 
@@ -177,9 +177,10 @@ see [Limitations](#limitations).
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
 | `computeTotals(draft, options?)` | `TotalsResult` — derive BT-131, the VAT breakdown and BT-106 to BT-115 from a draft. Returns `{ ok: false, errors }` on a disagreement or on input it refuses to answer; it throws for no input the types allow (`NaN` included, which they do). |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
-| `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
-| `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED Schematron business rules, via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one), `FacturXProfileNotDetectedError` if the profile is omitted and can't be detected, `FacturXSaxonError` if the server is unreachable, answers non-2xx, or returns a body that isn't a real SVRL report. |
+| `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled XSD of the document's profile — all five ship one. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
+| `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled Schematron business rules of the document's profile — all five ship one — via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one), `FacturXProfileNotDetectedError` if the profile is omitted and can't be detected, `FacturXSaxonError` if the server is unreachable, answers non-2xx, or returns a body that isn't a real SVRL report. |
 | `Profile` | Const object of the five Factur-X conformance levels. |
+| `atLeast(profile, floor)` | `boolean` — whether `profile` is `floor` or richer, over the five nested profiles. What `serialize` gates on; exported so a caller can ask the same question before building an invoice for a reduced profile. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
 | `DraftInvoice`, `TotalsError`, `TotalsResult` | Shapes taken and returned by `computeTotals`. A `DraftInvoice` is a `FacturXInvoice` with `lineTotal`, `taxBreakdown` amounts and `totals` optional. |
@@ -277,9 +278,9 @@ Line-level allowances/charges are also checked arithmetically: `line.lineTotal` 
 
 ## Amounts don't carry a currency, except one
 
-Every `ram:*Amount` element is serialized without `currencyID` — the invoice's single `currency` is implicit throughout, and the EN 16931 / EXTENDED Schematron rejects the attribute wherever it's redundant ("attribute not used in the given context"). The lone exception is `ram:TaxTotalAmount` (BT-110), which always carries `currencyID` set to that same `currency`: the Schematron's rule for this one element is conditional rather than a flat rejection, and permits `currencyID` when it matches `InvoiceCurrencyCode` — presumably to disambiguate it from an optional second VAT total in a separate accounting currency (BT-111, unsupported here — there's exactly one `currency` per invoice).
+Every `ram:*Amount` element is serialized without `currencyID` — the invoice's single `currency` is implicit throughout, and every bundled Schematron rejects the attribute wherever it's redundant ("attribute not used in the given context"). The lone exception is `ram:TaxTotalAmount` (BT-110), which always carries `currencyID` set to that same `currency`: the Schematron's rule for this one element is conditional rather than a flat rejection, and permits `currencyID` when it matches `InvoiceCurrencyCode` — presumably to disambiguate it from an optional second VAT total in a separate accounting currency (BT-111, unsupported here — there's exactly one `currency` per invoice).
 
-This is applied uniformly across all five profiles, but only verified live against the two whose Schematron is bundled (`EN 16931`, `EXTENDED`) — `BASIC`, `BASIC WL` and `MINIMUM` have no bundled rule set to check it against, so their `currencyID` handling is an unverified assumption, not a demonstrated correctness claim.
+This is applied uniformly across all five profiles and verified live against each of them: every profile's rule set is bundled, and the test suite puts each document in front of its own.
 
 ## Unit prices keep their own precision
 
@@ -291,15 +292,57 @@ This is applied uniformly across all five profiles, but only verified live again
 
 ## Profiles
 
-| Profile | Status |
-| --- | --- |
-| `EN 16931` | Implemented, validated, veraPDF-checked |
-| `EXTENDED` | Same structure as `EN 16931`, plus the four French-extension line fields below |
-| `BASIC` | Guideline URN only |
-| `BASIC WL` | Guideline URN only |
-| `MINIMUM` | Guideline URN only |
+All five profiles are built, and `serialize` restricts what it emits to what each
+one allows — a `MINIMUM` document is a MINIMUM document, not an EN 16931 one
+wearing a MINIMUM label.
 
-Only `EN 16931` runs mandatory-rule validation before generating. The `profile` argument otherwise picks the guideline URN and, for the four fields below, what a line is allowed to carry — it does **not** restrict which fields a reduced profile (`BASIC` / `BASIC WL` / `MINIMUM`) may emit: `serialize` writes the same full structure regardless of the declared profile, same as the Elixir sibling (`Facturx.CII` has no such restriction either — verified by reading its source, not assumed).
+| Profile | Carries | XSD | Schematron |
+| --- | --- | --- | --- |
+| `MINIMUM` | Header only; no VAT breakdown, no lines. Seller address only | ✅ | ✅ |
+| `BASIC WL` | Full header, no lines ("without lines") | ✅ | ✅ |
+| `BASIC` | Header and lines, EN 16931-compliant subset | ✅ | ✅ |
+| `EN 16931` | The norm itself | ✅ | ✅ |
+| `EXTENDED` | The norm plus the French `EXT-FR-FE-*` line fields | ✅ | ✅ |
+
+The five are strictly nested — every element name `MINIMUM` declares is in
+`BASIC WL`, and so on up — which is what lets a single ordering decide what may
+be emitted rather than one rule per profile per element. The floors, mirroring
+the Elixir sibling's `Facturx.CII`:
+
+| From | Element | Model field |
+| --- | --- | --- |
+| `BASIC WL` | `ram:IncludedNote` (document level) | `notes` |
+| `BASIC WL` | `ram:SellerTaxRepresentativeTradeParty` | `taxRepresentative` |
+| `BASIC WL` | Everything in the settlement but the currency and the summation | `paymentMeans`, `taxBreakdown`, `billingPeriod`, `allowances`, `charges`, `paymentTerms`, `precedingInvoices` |
+| `BASIC WL` | `ram:LineTotalAmount`, `ram:ChargeTotalAmount`, `ram:AllowanceTotalAmount`, `ram:TotalPrepaidAmount` | `totals.lineTotal`, `.chargeTotal`, `.allowanceTotal`, `.prepaid` |
+| `BASIC WL` | `ram:GlobalID`; every address field but `ram:CountryID`; any party's address but the seller's | `globalId`, `address` |
+| `BASIC` | `ram:IncludedSupplyChainTradeLineItem` | `lines` |
+| `EN 16931` | `ram:DefinedTradeContact` | `contact` |
+| `EN 16931` | `ram:ApplicableTradeSettlementFinancialCard`, `ram:AccountName`, `ram:BICID` | `paymentMeans[].cardId`/`.cardholderName`, `.accountName`, `.bic` |
+| `EXTENDED` | The four French line extensions below | `lines[].notes`/`.shipTo`/`.deliveryDate`/`.precedingInvoice` |
+
+Setting a field a profile does not carry is not an error — same "profile decides,
+not the caller" philosophy as `taxDueDateTypeCode` — but it is dropped on the
+wire, so a `parse(generate(...))` round-trip only reproduces it under a profile
+that carries it.
+
+Two model fields are optional *because* of the reduced profiles, and required
+again at `EN 16931` where `validateEn16931` asks for them: `totals.lineTotal`
+(BT-106, absent from `MINIMUM`'s summation) and `TradeParty.address` (BG-5 /
+BG-8 — `MINIMUM` carries the seller's and refuses everyone else's). Neither is
+invented on the way back: a `MINIMUM` document parses to an invoice with no
+`lineTotal` and a buyer with no address, rather than to zero and an empty
+country.
+
+> **MINIMUM is not an invoice.** Its schema has no `ram:ApplicableTradeTax`, so
+> it cannot carry the VAT breakdown (BG-23) the French mandate requires from day
+> one — nor BT-8, which lives inside it. `BASIC WL` carries no lines, which the
+> mandate requires on its target trajectory (BG-25). Neither is a valid French
+> e-invoice; `BASIC` is the leanest profile that is.
+
+Only `EN 16931` runs the full mandatory-field validation before generating. The
+code-list rules (BT-8, and BT-23 under `validateFrenchRules`) run whatever the
+profile, since both are serialized wherever the profile carries them.
 
 ### EXTENDED-only line fields (EXT-FR-FE-\*)
 
@@ -314,20 +357,19 @@ Four `LineItem` fields are French EXTENDED extensions — not EN 16931 business 
 
 Setting any of these on a non-`EXTENDED` invoice is not an error — same "profile decides, not the caller" philosophy as `taxDueDateTypeCode` — but a `parse(generate(...))` round-trip only reproduces them under `EXTENDED`.
 
-`EN 16931` and `EXTENDED` additionally ship a bundled XSD, checkable with [`validateXsd`](#xsd-validation); `BASIC`, `BASIC WL` and `MINIMUM` don't.
+Every profile ships a bundled XSD and rule set, checkable with [`validateXsd`](#xsd-validation) and [`validateSchematron`](#schematron-validation).
 
 ## Limitations
 
 Left as-is, either unverifiable or deliberate — not correctness bugs:
 
-- `currencyID` handling (see above) is unverified for `BASIC` / `BASIC WL` / `MINIMUM` — no bundled Schematron exists to check it against.
 - Amounts are `number`, not a decimal type, and are rounded with `toFixed(2)` — the same way they are serialized. A half-cent tie therefore follows the float representation rather than decimal half-up (`(1.005).toFixed(2)` is `1.00`), so a figure may differ by a cent from a decimal-based implementation. BR-CO-17's tolerance is a full currency unit and accepts either.
 - BT-114 (the rounding amount) has no field in `MonetaryTotals`, so it is neither serialized nor usable in `computeTotals`. BR-CO-16 is therefore `duePayable = grandTotal - prepaid`, with no rounding term.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
 ## XSD validation
 
-`validateXsd` checks CII XML against the official EN 16931 / EXTENDED XSD, bundled under `schemas/xsd/` (see `schemas/NOTICE.md` for provenance and licensing). It uses [`xmllint-wasm`](https://github.com/noppa/xmllint-wasm) — libxml2 compiled to WebAssembly, in-process, no native build step and no external server — declared as an **optional peer dependency**: npm won't install it or warn about its absence unless you add it yourself, so callers who never validate don't carry the 860KB.
+`validateXsd` checks CII XML against the official XSD of its profile — all five are bundled under `schemas/xsd/` (see `schemas/NOTICE.md` for provenance and licensing). It uses [`xmllint-wasm`](https://github.com/noppa/xmllint-wasm) — libxml2 compiled to WebAssembly, in-process, no native build step and no external server — declared as an **optional peer dependency**: npm won't install it or warn about its absence unless you add it yourself, so callers who never validate don't carry the 860KB.
 
 ```bash
 npm install xmllint-wasm
@@ -344,13 +386,13 @@ if (!result.valid) {
 }
 ```
 
-The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in the XML, falling back to `EN 16931` if neither resolves (malformed XML, an unrecognized guideline URN) — a deliberate exception to "never guess silently": EN 16931's XSD is a structural superset, so it's still a meaningful check on a document whose exact profile isn't known, which matters for the extract → parse → correct → generate flow over a third-party document. Only `EN 16931` and `EXTENDED` ship a bundled schema; `validateXsd` throws `FacturXXsdNotBundledError` for the other three profiles when the profile *is* known (explicitly or detected) — that case isn't guessed away. Input is treated as untrusted: a `<!DOCTYPE>` is rejected outright (XXE / entity-expansion risk), never handed to the validator — checked only in the document's prolog, so a free-text field that happens to contain the literal string `<!DOCTYPE` isn't a false positive.
+The schema is picked from `options.profile`, or read from `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID` in the XML, falling back to `EN 16931` if neither resolves (malformed XML, an unrecognized guideline URN) — a deliberate exception to "never guess silently": EN 16931's XSD is a structural superset, so it's still a meaningful check on a document whose exact profile isn't known, which matters for the extract → parse → correct → generate flow over a third-party document. All five profiles ship a schema, so `FacturXXsdNotBundledError` is now unreachable through the public API; it stays for a bundle dropped from a future build, where a known profile with no schema must be an error rather than a silent fallback to EN 16931. Input is treated as untrusted: a `<!DOCTYPE>` is rejected outright (XXE / entity-expansion risk), never handed to the validator — checked only in the document's prolog, so a free-text field that happens to contain the literal string `<!DOCTYPE` isn't a false positive.
 
 `validateXsd` checks structure and cardinality — mandatory elements, types, sequence order — not business rules. It does not replace `validateEn16931`, nor a full Schematron run against the official rule set.
 
 ## Schematron validation
 
-`validateSchematron` runs the official EN 16931 / EXTENDED Schematron business rules, bundled under `schemas/schematron/` (see `schemas/NOTICE.md`). The Schematron compiles to XSLT 2.0, which Node can't run in-process — like the Python [`akretion/factur-x`](https://github.com/akretion/factur-x) library, validation is delegated to a [Saxon server](https://github.com/willemvlh/saxon-server) over HTTP:
+`validateSchematron` runs the official Schematron business rules of the document's profile — all five rule sets are bundled under `schemas/schematron/` (see `schemas/NOTICE.md`). The Schematron compiles to XSLT 2.0, which Node can't run in-process — like the Python [`akretion/factur-x`](https://github.com/akretion/factur-x) library, validation is delegated to a [Saxon server](https://github.com/willemvlh/saxon-server) over HTTP:
 
 ```bash
 docker compose -f docker/compose.yml up -d --build
@@ -366,13 +408,13 @@ if (!result.valid) {
 }
 ```
 
-The rule set is picked the same way as `validateXsd`: `options.profile`, or the XML's own guideline URN — `FacturXProfileNotDetectedError` if neither resolves. Only `EN 16931` and `EXTENDED` ship a bundled rule set; pass `options.xsl` with a compiled Schematron XSLT for anything else (e.g. a national CTC rule set). `<!DOCTYPE>` is rejected the same way as `validateXsd`, before any network call. A response that isn't network-reachable, doesn't come back 2xx, or comes back 2xx with a body that isn't an actual SVRL report (a misconfigured endpoint, a Saxon fault page) throws `FacturXSaxonError` rather than being read as "no violations found" — a broken connection to Saxon must never look like a clean `valid: true`.
+The rule set is picked the same way as `validateXsd`: `options.profile`, or the XML's own guideline URN — `FacturXProfileNotDetectedError` if neither resolves. All five profiles ship a rule set, and each document is checked against its own: validating a `MINIMUM` document with the EN 16931 rules would report it as missing everything MINIMUM deliberately omits. Pass `options.xsl` with a compiled Schematron XSLT to run something else (e.g. a national CTC rule set). `<!DOCTYPE>` is rejected the same way as `validateXsd`, before any network call. A response that isn't network-reachable, doesn't come back 2xx, or comes back 2xx with a body that isn't an actual SVRL report (a misconfigured endpoint, a Saxon fault page) throws `FacturXSaxonError` rather than being read as "no violations found" — a broken connection to Saxon must never look like a clean `valid: true`.
 
 If a custom `options.xsl` produces `svrl:text` with child markup (e.g. `<b>` inside the message), `error.message` still comes back as a plain string, but the fragments are joined in whatever order `fast-xml-parser` groups them in, not source order — the bundled EN 16931/EXTENDED rule sets never emit markup, so this only affects custom rule sets.
 
 Findings are split by SVRL severity into `result.errors` and `result.warnings` — only `warning` and `info` are non-blocking, so `result.valid` is `errors.length === 0`. `PEPPOL-EN16931-R008` ("no empty elements") is flagged `warning` and fires on every invoice with no delivery data, since CII still requires an empty `ram:ApplicableHeaderTradeDelivery` — a `valid: true` result can still carry warnings worth inspecting.
 
-> Privacy: a public Saxon endpoint means sending real invoice data to a third party. Self-host in production — `docker/Dockerfile` bakes the EN 16931 / EXTENDED code-list DB into the image so validation stays entirely offline, **provided you also pass `codedbUrl`**: the XSLT resolves the code-list DB via `document(...)`, and without `codedbUrl` the default is a live, unpinned `raw.githubusercontent.com` URL — self-hosting Saxon alone doesn't stop that fetch.
+> Privacy: a public Saxon endpoint means sending real invoice data to a third party. Self-host in production — `docker/Dockerfile` bakes all five code-list DBs into the image so validation stays entirely offline, **provided you also pass `codedbUrl`**: the XSLT resolves the code-list DB via `document(...)`, and without `codedbUrl` the default is a live, unpinned `raw.githubusercontent.com` URL — self-hosting Saxon alone doesn't stop that fetch.
 >
 > ```ts
 > await validateSchematron(xml, {

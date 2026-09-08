@@ -7,8 +7,14 @@ and `validateSchematron` work without downloading anything at runtime.
 
 | Path | Files | Upstream |
 |---|---|---|
+| `schemas/xsd/minimum/` | `Factur-X_MINIMUM.xsd` + 3 imported UN/CEFACT schemas | idem, MINIMUM profile |
+| `schemas/xsd/basicwl/` | `Factur-X_BASICWL.xsd` + 3 imported UN/CEFACT schemas | idem, BASIC WL profile |
+| `schemas/xsd/basic/` | `Factur-X_BASIC.xsd` + 3 imported UN/CEFACT schemas | idem, BASIC profile |
 | `schemas/xsd/en16931/` | `Factur-X_EN16931.xsd` + 3 imported UN/CEFACT schemas | Factur-X / EN 16931 standard, as packaged by [`akretion/factur-x`](https://github.com/akretion/factur-x) |
 | `schemas/xsd/extended/` | `Factur-X_EXTENDED.xsd` + 3 imported UN/CEFACT schemas | idem, EXTENDED profile |
+| `schemas/schematron/minimum/` | `Factur-X_1.09_MINIMUM.xsl`, `FACTUR-X_MINIMUM_codedb.xml` | idem, MINIMUM profile |
+| `schemas/schematron/basicwl/` | `Factur-X_1.09_BASICWL.xsl`, `FACTUR-X_BASIC-WL_codedb.xml` | idem, BASIC WL profile |
+| `schemas/schematron/basic/` | `Factur-X_1.09_BASIC.xsl`, `FACTUR-X_BASIC_codedb.xml` | idem, BASIC profile |
 | `schemas/schematron/en16931/` | `Factur-X_1.09_EN16931.xsl`, `FACTUR-X_EN16931_codedb.xml` | idem |
 | `schemas/schematron/extended/` | `Factur-X_1.09_EXTENDED.xsl`, `FACTUR-X_EXTENDED_codedb.xml` | idem, EXTENDED profile |
 

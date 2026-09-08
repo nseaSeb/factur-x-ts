@@ -16,7 +16,7 @@ import { hasDoctype, resolveProfile, stripBom } from './shared.js';
 export class FacturXXsdNotBundledError extends Error {
   constructor(profile: Profile) {
     super(
-      `No bundled XSD schema for profile "${profile}". Only "EN 16931" and "EXTENDED" ship with factur-x-ts.`,
+      `No bundled XSD schema for profile "${profile}".`,
     );
     this.name = 'FacturXXsdNotBundledError';
   }
@@ -27,10 +27,34 @@ interface SchemaBundle {
   readonly imports: readonly string[];
 }
 
-// Only EN 16931 and EXTENDED ship their XSD — mirrors the Elixir sibling
-// library, which bundles the same two and errors on the rest rather than
-// silently falling back to EN 16931.
+// All five profiles ship their XSD, as the Elixir sibling does. Kept a
+// Partial<Record> rather than a Record so removing one is a data change, not a
+// type error, and so the not-bundled path stays reachable and tested.
 const SCHEMAS: Partial<Record<Profile, SchemaBundle>> = {
+  MINIMUM: {
+    main: 'minimum/Factur-X_MINIMUM.xsd',
+    imports: [
+      'minimum/Factur-X_1.09_MINIMUM_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd',
+      'minimum/Factur-X_1.09_MINIMUM_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd',
+      'minimum/Factur-X_1.09_MINIMUM_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd',
+    ],
+  },
+  'BASIC WL': {
+    main: 'basicwl/Factur-X_BASICWL.xsd',
+    imports: [
+      'basicwl/Factur-X_1.09_BASICWL_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd',
+      'basicwl/Factur-X_1.09_BASICWL_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd',
+      'basicwl/Factur-X_1.09_BASICWL_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd',
+    ],
+  },
+  BASIC: {
+    main: 'basic/Factur-X_BASIC.xsd',
+    imports: [
+      'basic/Factur-X_1.09_BASIC_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd',
+      'basic/Factur-X_1.09_BASIC_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd',
+      'basic/Factur-X_1.09_BASIC_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd',
+    ],
+  },
   'EN 16931': {
     main: 'en16931/Factur-X_EN16931.xsd',
     imports: [

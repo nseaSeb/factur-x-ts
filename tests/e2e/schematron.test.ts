@@ -30,6 +30,23 @@ describe('validateSchematron against a live Saxon server', () => {
     SAXON_TIMEOUT_MS,
   );
 
+  // Each profile against its own rule set. Validating a MINIMUM document with
+  // the EN 16931 rules would report it as missing everything MINIMUM
+  // deliberately omits, so the profile decides the rules as well as the fields.
+  // This is the check the XSD cannot make: it types every party alike and
+  // accepts a buyer address in MINIMUM, which the rules refuse.
+  it.each(['MINIMUM', 'BASIC WL', 'BASIC'] as const)(
+    'accepts a %s document against its own rule set',
+    async (profile) => {
+      if (SAXON_URL === undefined) return;
+      const xml = serialize(sampleInvoice(), profile);
+      const result = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    },
+    SAXON_TIMEOUT_MS,
+  );
+
   it.runIf(SAXON_URL !== undefined)(
     'accepts a well-formed invoice against the EXTENDED Schematron',
     async () => {
@@ -73,6 +90,24 @@ describe('validateSchematron against a live Saxon server', () => {
       const report = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
       expect(report.errors).toEqual([]);
       expect(report.valid).toBe(true);
+    },
+    SAXON_TIMEOUT_MS,
+  );
+
+  it.runIf(SAXON_URL !== undefined)(
+    'rejects a MINIMUM document with no seller address',
+    async () => {
+      // Negative control for the reduced rule sets: without it, "MINIMUM
+      // accepts our document" would read the same whether the MINIMUM rules
+      // ran or the XSL silently asserted nothing. BR-08 / BR-09 require the
+      // seller's address, the one address MINIMUM does carry.
+      const xml = serialize(sampleInvoice(), 'MINIMUM').replace(
+        /<ram:PostalTradeAddress>[\s\S]*?<\/ram:PostalTradeAddress>/,
+        '',
+      );
+      const result = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
     },
     SAXON_TIMEOUT_MS,
   );

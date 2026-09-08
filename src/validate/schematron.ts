@@ -1,5 +1,5 @@
 // src/validate/schematron.ts
-// Validate CII XML against the EN 16931 / EXTENDED Schematron business rules.
+// Validate CII XML against the bundled Schematron business rules of each profile.
 //
 // The Schematron compiles to XSLT 2.0, which Node cannot run in-process (no
 // native XSLT2 engine). Like the Python akretion/factur-x library — and the
@@ -29,7 +29,7 @@ import { hasDoctype, resolveProfile, stripBom } from './shared.js';
 export class FacturXSchematronNotBundledError extends Error {
   constructor(profile: Profile) {
     super(
-      `No bundled Schematron for profile "${profile}". Only "EN 16931" and "EXTENDED" ship with factur-x-ts.`,
+      `No bundled Schematron for profile "${profile}".`,
     );
     this.name = 'FacturXSchematronNotBundledError';
   }
@@ -54,9 +54,29 @@ interface SchematronBundle {
   readonly defaultCodedbUrl: string;
 }
 
-// Only EN 16931 and EXTENDED ship their Schematron — mirrors the Elixir
-// sibling, which errors on the rest rather than silently falling back.
+// All five profiles ship their rule set, as the Elixir sibling does. Each
+// profile is checked against its own rules: a MINIMUM document validated
+// against the EN 16931 rules would be reported as missing everything MINIMUM
+// deliberately omits.
 const SCHEMATRON: Partial<Record<Profile, SchematronBundle>> = {
+  MINIMUM: {
+    xsl: 'minimum/Factur-X_1.09_MINIMUM.xsl',
+    codedbFile: 'FACTUR-X_MINIMUM_codedb.xml',
+    defaultCodedbUrl:
+      'https://raw.githubusercontent.com/akretion/factur-x/refs/heads/master/src/facturx/xsd_and_schematron/facturx-minimum/FACTUR-X_MINIMUM_codedb.xml',
+  },
+  'BASIC WL': {
+    xsl: 'basicwl/Factur-X_1.09_BASICWL.xsl',
+    codedbFile: 'FACTUR-X_BASIC-WL_codedb.xml',
+    defaultCodedbUrl:
+      'https://raw.githubusercontent.com/akretion/factur-x/refs/heads/master/src/facturx/xsd_and_schematron/facturx-basicwl/FACTUR-X_BASIC-WL_codedb.xml',
+  },
+  BASIC: {
+    xsl: 'basic/Factur-X_1.09_BASIC.xsl',
+    codedbFile: 'FACTUR-X_BASIC_codedb.xml',
+    defaultCodedbUrl:
+      'https://raw.githubusercontent.com/akretion/factur-x/refs/heads/master/src/facturx/xsd_and_schematron/facturx-basic/FACTUR-X_BASIC_codedb.xml',
+  },
   'EN 16931': {
     xsl: 'en16931/Factur-X_1.09_EN16931.xsl',
     codedbFile: 'FACTUR-X_EN16931_codedb.xml',

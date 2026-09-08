@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { serialize } from '../../src/xml/serializer.js';
-import {
-  parseSvrl,
-  validateSchematron,
-  FacturXSchematronNotBundledError,
-  FacturXSaxonError,
-} from '../../src/validate/schematron.js';
+import { parseSvrl, validateSchematron, FacturXSaxonError } from '../../src/validate/schematron.js';
+import { Profile } from '../../src/types/profiles.js';
 import { sampleInvoice } from '../fixtures/invoice.js';
 
 function svrl(findings: string): string {
@@ -87,9 +83,15 @@ describe('parseSvrl', () => {
 });
 
 describe('validateSchematron', () => {
-  it('throws for a profile whose Schematron is not bundled', async () => {
-    const xml = serialize(sampleInvoice(), 'BASIC');
-    await expect(validateSchematron(xml)).rejects.toBeInstanceOf(FacturXSchematronNotBundledError);
+  // All five profiles ship a rule set. Reaching the Saxon call at all is the
+  // proof the bundle resolved: FacturXSchematronNotBundledError is raised
+  // before any request, so an unreachable endpoint failing with
+  // FacturXSaxonError means the XSL and its code-list DB were both found.
+  it.each(Object.values(Profile))('resolves the bundled rule set for %s', async (profile) => {
+    const xml = serialize(sampleInvoice(), profile);
+    await expect(
+      validateSchematron(xml, { endpoint: 'http://192.0.2.1/unreachable', timeoutMs: 500 }),
+    ).rejects.toBeInstanceOf(FacturXSaxonError);
   });
 
   it('rejects XML carrying a DOCTYPE without contacting a Saxon server', async () => {
