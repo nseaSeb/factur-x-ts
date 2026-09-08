@@ -8,6 +8,7 @@ import type {
   ValidationOptions,
   ValidationResult,
 } from '../types/validation.js';
+import { isClose, round2, snapNearZero } from '../amounts.js';
 import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformVatPointDate } from './fr.js';
 
 export type { ValidationError, ValidationErrorCode, ValidationOptions, ValidationResult };
@@ -294,33 +295,6 @@ function validateAllowanceChargeTotal(
       : `Sum of document-level ${kind}s (${groupSum.toFixed(2)}) does not match totals.${kind}Total (${rule})`;
 
   errors.push(field(fieldName, 'AMOUNT_MISMATCH', message));
-}
-
-// EN 16931 amounts are 2-decimal by contract, and the official Schematron's
-// header-sum rules (BR-CO-10/11/12/13/14/15/16) compare exactly after
-// rounding the sum to cents once — not with a fixed absolute slack. Matching
-// that: round each side to 2 decimals the same way the wire format does
-// (`toFixed`, not `Math.round(x * 100)`, which misrounds values like 1.005
-// due to float representation) and compare exactly.
-//
-// One float trap toFixed doesn't save you from: a subtraction/addition chain
-// (e.g. lineTotal - allowanceTotal + chargeTotal) that is mathematically
-// exactly zero can land on a tiny negative float instead (-3.469e-18, not
-// -0), and (-3.469e-18).toFixed(2) is the string "-0.00" — not "0.00", even
-// though (-0).toFixed(2) IS "0.00". Snapping anything far below cent
-// precision to exact 0 first avoids that false mismatch without masking any
-// real one (a genuine difference is always >= 0.005, twelve orders of
-// magnitude above the snap threshold).
-function snapNearZero(value: number): number {
-  return Math.abs(value) < 1e-9 ? 0 : value;
-}
-
-function isClose(a: number, b: number): boolean {
-  return snapNearZero(a).toFixed(2) === snapNearZero(b).toFixed(2);
-}
-
-function round2(value: number): number {
-  return Number(value.toFixed(2));
 }
 
 // BR-CO-25 (asserted by the EXTENDED Schematron; EN 16931's doesn't carry it,

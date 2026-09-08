@@ -92,18 +92,97 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 
 `rawXml` is the undecoded attachment bytes, for callers that want to run their own Schematron or archive the original.
 
+## Let the library do the arithmetic
+
+`computeTotals` derives the line amounts, the VAT breakdown and the document
+totals — BR-CO-10 to BR-CO-17, which the XSD does not check and only the
+Schematron catches, after the fact.
+
+```ts
+import { computeTotals } from 'factur-x-ts';
+
+const result = computeTotals({
+  number: 'FA-2026-0042',
+  issueDate: new Date(Date.UTC(2026, 2, 15)),
+  currency: 'EUR',
+  typeCode: '380',
+  seller: { name: 'Vendeur SAS', vatId: 'FR12345678901', address: { country: 'FR' } },
+  buyer: { name: 'Acheteur SARL', address: { country: 'FR' } },
+  lines: [
+    { id: '1', name: 'Prestation', quantity: 3, unit: 'C62', netPrice: 33.33, vatCategory: 'S', vatRate: 5.5 },
+  ],
+  paymentTerms: '30 jours net', // BT-20 — BR-CO-25, since the amount due is positive
+});
+
+if (result.ok) {
+  result.invoice.totals.lineTotal;  // 99.99
+  result.invoice.totals.taxTotal;   // 5.5   — BR-CO-17 rounds 5.49945 to the cent
+  result.invoice.totals.grandTotal; // 105.49
+}
+```
+
+A figure you supplied is checked, not kept: every derivable amount in the
+returned invoice is the derived one, and a disagreement comes back instead of an
+invoice rather than being resolved silently.
+
+```ts
+const result = computeTotals(draft);
+if (!result.ok) {
+  for (const e of result.errors) {
+    console.error(`${e.field}: ${e.message}`); // 'totals.grandTotal: stated 999.00, derived 120.00'
+  }
+}
+```
+
+What a caller supplies and the arithmetic cannot derive is carried through
+untouched: BT-113 (`prepaid`), and a breakdown entry's BT-120 / BT-121 and BT-8
+override. Pass `{ overwrite: true }` to take the computed figures anyway.
+
+Beyond a `TOTALS_MISMATCH`, four inputs are refused outright rather than
+answered with a number that means nothing:
+
+- `NO_LINES` — nothing implies the amounts. A BASIC WL or MINIMUM document
+  carries no lines and still has a VAT liability, so its caller states their
+  totals rather than asking for them.
+- `ORPHAN_TAX_BREAKDOWN` — a breakdown entry matching no line, allowance or
+  charge. Nothing implies its taxable amount, and dropping it would silently
+  remove a declared liability.
+- `DUPLICATE_TAX_BREAKDOWN` — two entries sharing a category and rate. One would
+  overwrite the other and take its exemption reason with it, surfacing much
+  later as a BR-E-10 rejection of a document whose caller did supply one.
+- `NOT_A_FINITE_AMOUNT` — a `NaN` or `Infinity` reaching an amount. It would
+  propagate through every sum and be serialized as
+  `<ram:GrandTotalAmount>NaN</ram:GrandTotalAmount>`.
+
+One comparison is deliberately looser than the rest: a supplied BT-117
+(`calculatedAmount`) is accepted within a cent of the derived one. It is the one
+figure two correct implementations can legitimately disagree on — see the
+rounding note under [Limitations](#limitations). Every other comparison is
+exact after rounding to the cent, as the Schematron's own sum rules are.
+
+An entry you supplied is completed, never replaced: BT-120 and BT-121 (the VAT
+exemption reason and its code) cannot be derived from amounts, and category `E`
+is rejected without them (BR-E-10).
+
+Two amounts are never derived, because nothing in the invoice determines them.
+BT-113 (`prepaid`) is carried through as given and subtracted from BT-115
+(BR-CO-16). BT-114, the rounding amount, has no field in `MonetaryTotals` yet —
+see [Limitations](#limitations).
+
 ## API
 
 | Export | Description |
 | --- | --- |
 | `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice. Throws `FacturXGenerateError`. |
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
+| `computeTotals(draft, options?)` | `TotalsResult` — derive BT-131, the VAT breakdown and BT-106 to BT-115 from a draft. Returns `{ ok: false, errors }` on a disagreement or on input it refuses to answer; it throws for no input the types allow (`NaN` included, which they do). |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
 | `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED XSD. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
 | `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled EN 16931 / EXTENDED Schematron business rules, via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one), `FacturXProfileNotDetectedError` if the profile is omitted and can't be detected, `FacturXSaxonError` if the server is unreachable, answers non-2xx, or returns a body that isn't a real SVRL report. |
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
+| `DraftInvoice`, `TotalsError`, `TotalsResult` | Shapes taken and returned by `computeTotals`. A `DraftInvoice` is a `FacturXInvoice` with `lineTotal`, `taxBreakdown` amounts and `totals` optional. |
 | `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. `XsdValidationError` carries xmllint-wasm's `rawMessage` and, when it could parse one out, `location: { fileName, lineNumber }` — both absent for factur-x-ts's own synthetic errors (e.g. the DOCTYPE rejection). |
 | `SchematronViolation`, `SchematronValidationResult` | Shapes returned by Schematron validation. |
 
@@ -242,6 +321,8 @@ Setting any of these on a non-`EXTENDED` invoice is not an error — same "profi
 Left as-is, either unverifiable or deliberate — not correctness bugs:
 
 - `currencyID` handling (see above) is unverified for `BASIC` / `BASIC WL` / `MINIMUM` — no bundled Schematron exists to check it against.
+- Amounts are `number`, not a decimal type, and are rounded with `toFixed(2)` — the same way they are serialized. A half-cent tie therefore follows the float representation rather than decimal half-up (`(1.005).toFixed(2)` is `1.00`), so a figure may differ by a cent from a decimal-based implementation. BR-CO-17's tolerance is a full currency unit and accepts either.
+- BT-114 (the rounding amount) has no field in `MonetaryTotals`, so it is neither serialized nor usable in `computeTotals`. BR-CO-16 is therefore `duePayable = grandTotal - prepaid`, with no rounding term.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
 ## XSD validation
