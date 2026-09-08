@@ -3,7 +3,7 @@ import { serialize } from '../../src/xml/serializer.js';
 import { detectProfile } from '../../src/xml/guideline.js';
 import { validateXsd } from '../../src/validate/xsd.js';
 import { Profile } from '../../src/types/profiles.js';
-import { sampleInvoice } from '../fixtures/invoice.js';
+import { maximalInvoice, sampleInvoice } from '../fixtures/invoice.js';
 
 // Swap two sibling top-level elements to produce XSD-invalid (wrong sequence
 // order) XML that no business-rule validator would catch — proving the XSD
@@ -56,8 +56,11 @@ describe('validateXsd', () => {
   // All five profiles ship a schema, so there is no longer a profile that
   // reaches FacturXXsdNotBundledError — the error stays for a bundle removed
   // later, and the reachable claim worth testing is the opposite one.
+  // maximalInvoice, not sampleInvoice: the sample carries no line description,
+  // which is exactly why an ungated ram:Description (invalid below EN 16931)
+  // went unnoticed here.
   it.each(Object.values(Profile))('validates a %s document against its own bundled schema', async (profile) => {
-    const xml = serialize(sampleInvoice(), profile);
+    const xml = serialize(maximalInvoice(), profile);
     expect(detectProfile(xml)).toBe(profile);
     const result = await validateXsd(xml);
     expect(result.errors).toEqual([]);

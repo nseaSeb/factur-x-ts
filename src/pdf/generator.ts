@@ -22,7 +22,12 @@ import type { Profile } from '../types/profiles.js';
 import { serialize } from '../xml/serializer.js';
 import { buildXmpMetadata } from './metadata.js';
 import { isFacturXFilespec } from './filespec.js';
-import { validateCodeLists, validateEn16931, type ValidationError } from '../profiles/en16931.js';
+import {
+  validateCodeLists,
+  validateEn16931,
+  validateProfileStructure,
+  type ValidationError,
+} from '../profiles/en16931.js';
 
 export class FacturXGenerateError extends Error {
   readonly validationErrors: readonly ValidationError[];
@@ -45,17 +50,21 @@ export async function generate(options: GenerateOptions): Promise<Uint8Array> {
   const { invoice, profile, visualPdf, validation: validationOptions } = options;
 
   // The full mandatory-field set applies to EN 16931 only — the reduced profiles
-  // legitimately omit fields it requires. The code-list rules apply everywhere,
-  // because BT-8/BT-23 are serialized whatever the profile.
-  const validation =
+  // legitimately omit fields it requires. Everywhere else, two narrower sets
+  // still apply: the code-list rules, because BT-8/BT-23 are serialized
+  // whatever the profile, and what the profile's own XSD makes mandatory.
+  const errors =
     profile === 'EN 16931'
-      ? validateEn16931(invoice, validationOptions)
-      : validateCodeLists(invoice, validationOptions);
+      ? validateEn16931(invoice, validationOptions).errors
+      : [
+          ...validateCodeLists(invoice, validationOptions).errors,
+          ...validateProfileStructure(invoice, profile).errors,
+        ];
 
-  if (!validation.valid) {
+  if (errors.length > 0) {
     throw new FacturXGenerateError(
-      `Invoice does not satisfy the ${profile} rules (${validation.errors.length} error(s))`,
-      validation.errors,
+      `Invoice does not satisfy the ${profile} rules (${errors.length} error(s))`,
+      errors,
     );
   }
 

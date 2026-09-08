@@ -13,7 +13,7 @@ import {
   PDFString,
   decodePDFRawStream,
 } from 'pdf-lib';
-import { generate } from '../../src/pdf/generator.js';
+import { generate, FacturXGenerateError } from '../../src/pdf/generator.js';
 import { parse } from '../../src/pdf/parser.js';
 import { sampleInvoice, expectedRoundTrip } from '../fixtures/invoice.js';
 
@@ -167,6 +167,48 @@ describe('regenerating over an existing Factur-X PDF', () => {
 
     const result = spawnSync('verapdf', ['--flavour', '3b', '--format', 'text', pdfPath], { encoding: 'utf8' });
     expect(result.stdout).toContain('PASS');
+  });
+});
+
+describe('profile-structure validation', () => {
+  it('refuses to write a BASIC WL document with no VAT breakdown, which its schema requires', async () => {
+    const invoice = { ...sampleInvoice(), taxBreakdown: [] };
+    const error = await generate({ invoice, profile: 'BASIC WL' }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(FacturXGenerateError);
+    const codes = (error as FacturXGenerateError).validationErrors.map((e) => e.code);
+    expect(codes).toContain('NO_TAX_BREAKDOWN');
+    // The code-list rules run alongside: BT-8 lives inside the group that is
+    // missing, so it is unemittable for the same reason.
+    expect(codes).toContain('UNEMITTABLE_VAT_POINT_DATE');
+  });
+
+  it('refuses to write a BASIC WL document with no BT-106, which its schema requires', async () => {
+    const invoice = sampleInvoice();
+    const { lineTotal: _dropped, ...totals } = invoice.totals;
+    await expect(generate({ invoice: { ...invoice, totals }, profile: 'BASIC WL' })).rejects.toMatchObject({
+      validationErrors: [{ code: 'MISSING_FIELD', field: 'totals.lineTotal' }],
+    });
+  });
+
+  it('refuses to write a BASIC document with no lines, which its schema requires', async () => {
+    const invoice = { ...sampleInvoice(), lines: [] };
+    await expect(generate({ invoice, profile: 'BASIC' })).rejects.toMatchObject({
+      validationErrors: [{ code: 'NO_LINES', field: 'lines' }],
+    });
+  });
+
+  it('refuses to re-issue a parsed MINIMUM document at BASIC WL', async () => {
+    // The reachable path: MINIMUM carries neither BT-106 nor a VAT breakdown,
+    // so what parse gives back cannot be re-generated at a profile whose
+    // schema makes both mandatory. Silently writing an invalid PDF here is
+    // exactly what the check exists to prevent.
+    const minimum = await generate({ invoice: sampleInvoice(), profile: 'MINIMUM' });
+    const { invoice } = await parse(minimum);
+
+    await expect(generate({ invoice, profile: 'BASIC WL' })).rejects.toBeInstanceOf(FacturXGenerateError);
+    // MINIMUM itself round-trips: its schema requires neither.
+    await expect(generate({ invoice, profile: 'MINIMUM' })).resolves.toBeInstanceOf(Uint8Array);
   });
 });
 
