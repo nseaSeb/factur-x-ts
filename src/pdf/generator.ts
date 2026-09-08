@@ -1,5 +1,6 @@
 // src/pdf/generator.ts
-// PDF/A-3 Factur-X generator from a FacturXInvoice object.
+// PDF/A-3 Factur-X generator, from a FacturXInvoice object or from ready-made
+// CII XML.
 
 import {
   PDFDocument,
@@ -17,9 +18,11 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import type { GenerateOptions } from '../types/index.js';
+import type { GenerateFromInvoiceOptions, GenerateFromXmlOptions, GenerateOptions } from '../types/index.js';
 import type { Profile } from '../types/profiles.js';
 import { serialize } from '../xml/serializer.js';
+import { detectInvoiceNumber, detectProfile } from '../xml/guideline.js';
+import { hasDoctype, resolveProfile, stripBom } from '../validate/shared.js';
 import { buildXmpMetadata } from './metadata.js';
 import { isFacturXFilespec } from './filespec.js';
 import {
@@ -46,38 +49,25 @@ const OUTPUT_CONDITION_IDENTIFIER = 'sRGB IEC61966-2.1';
 // profiles with a human-readable visual layout get AFRelationship=Alternative.
 const DATA_RELATIONSHIP_PROFILES: readonly Profile[] = ['MINIMUM', 'BASIC WL'];
 
+interface Payload {
+  readonly xmlBytes: Uint8Array;
+  readonly profile: Profile;
+  readonly title: string;
+}
+
 export async function generate(options: GenerateOptions): Promise<Uint8Array> {
-  const { invoice, profile, visualPdf, validation: validationOptions } = options;
+  // `options.xml !== undefined`, not `'xml' in options`: the invoice member
+  // declares `xml?: never` to keep object literals honest, which makes `in`
+  // true for both members and useless as a discriminant.
+  const { xmlBytes, profile, title } =
+    options.xml !== undefined ? payloadFromXml(options) : payloadFromInvoice(options);
 
-  // The full mandatory-field set applies to EN 16931 only — the reduced profiles
-  // legitimately omit fields it requires. Everywhere else, two narrower sets
-  // still apply: the code-list rules, because BT-8/BT-23 are serialized
-  // whatever the profile, and what the profile's own XSD makes mandatory.
-  const errors =
-    profile === 'EN 16931'
-      ? validateEn16931(invoice, validationOptions).errors
-      : [
-          ...validateCodeLists(invoice, validationOptions).errors,
-          ...validateProfileStructure(invoice, profile).errors,
-        ];
-
-  if (errors.length > 0) {
-    throw new FacturXGenerateError(
-      `Invoice does not satisfy the ${profile} rules (${errors.length} error(s))`,
-      errors,
-    );
-  }
-
-  const xml = serialize(invoice, profile);
-  const xmlBytes = new TextEncoder().encode(xml);
-
-  const pdfDoc = visualPdf ? await PDFDocument.load(visualPdf) : await createBlankTemplate();
+  const pdfDoc = options.visualPdf ? await PDFDocument.load(options.visualPdf) : await createBlankTemplate();
   removeSupersededFacturXAttachments(pdfDoc);
   await ensureOutputIntent(pdfDoc);
 
   const now = new Date();
   const documentIdHex = randomBytes(16).toString('hex');
-  const title = `Factur-X — ${invoice.number}`;
 
   pdfDoc.setProducer('factur-x-ts');
   pdfDoc.setCreator('factur-x-ts');
@@ -100,6 +90,67 @@ export async function generate(options: GenerateOptions): Promise<Uint8Array> {
 
   // PDF/A-3b forbids cross-reference/object streams.
   return pdfDoc.save({ useObjectStreams: false });
+}
+
+function payloadFromInvoice(options: GenerateFromInvoiceOptions): Payload {
+  const { invoice, profile, validation: validationOptions } = options;
+
+  // The full mandatory-field set applies to EN 16931 only — the reduced profiles
+  // legitimately omit fields it requires. Everywhere else, two narrower sets
+  // still apply: the code-list rules, because BT-8/BT-23 are serialized
+  // whatever the profile, and what the profile's own XSD makes mandatory.
+  const errors =
+    profile === 'EN 16931'
+      ? validateEn16931(invoice, validationOptions).errors
+      : [
+          ...validateCodeLists(invoice, validationOptions).errors,
+          ...validateProfileStructure(invoice, profile).errors,
+        ];
+
+  if (errors.length > 0) {
+    throw new FacturXGenerateError(
+      `Invoice does not satisfy the ${profile} rules (${errors.length} error(s))`,
+      errors,
+    );
+  }
+
+  return {
+    xmlBytes: new TextEncoder().encode(serialize(invoice, profile)),
+    profile,
+    title: `Factur-X — ${invoice.number}`,
+  };
+}
+
+// Ready-made XML is embedded as given: a Uint8Array byte for byte, a string
+// encoded once. Only the two header facts the PDF needs are read out of it —
+// the profile, for the XMP conformance level, and BT-1, for the title — and
+// neither goes through the deserializer, which may not model the document.
+function payloadFromXml(options: GenerateFromXmlOptions): Payload {
+  const xmlBytes = typeof options.xml === 'string' ? new TextEncoder().encode(options.xml) : options.xml;
+  const text = stripBom(new TextDecoder('utf-8').decode(xmlBytes));
+
+  // Same untrusted-input policy as validateXsd / validateSchematron: a DOCTYPE
+  // is refused before anything reads the document.
+  if (hasDoctype(text)) {
+    throw new FacturXGenerateError('XML carries a DOCTYPE declaration, which is refused (XXE / entity expansion)');
+  }
+
+  // No fallback: the level goes into the XMP packet as a statement about the
+  // document, and a guessed one is worse than no PDF.
+  const profile = resolveProfile(text, options.profile);
+  const declared = detectProfile(text);
+  if (options.profile !== undefined && declared !== undefined && declared !== options.profile) {
+    throw new FacturXGenerateError(
+      `options.profile is "${options.profile}" but the XML's guideline URN declares "${declared}" — the XMP and the XML would contradict each other`,
+    );
+  }
+
+  const number = detectInvoiceNumber(text);
+  return {
+    xmlBytes,
+    profile,
+    title: number === undefined ? 'Factur-X' : `Factur-X — ${number}`,
+  };
 }
 
 async function createBlankTemplate(): Promise<PDFDocument> {

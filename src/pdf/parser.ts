@@ -3,10 +3,17 @@
 
 import { PDFDocument, PDFName, PDFArray, PDFDict, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { XMLParser } from 'fast-xml-parser';
-import type { ParseResult } from '../types/index.js';
+import type { ExtractResult, ParseResult } from '../types/index.js';
 import { Profile, type FacturXMetadata } from '../types/profiles.js';
 import { deserialize } from '../xml/deserializer.js';
-import { FACTURX_ATTACHMENT_NAMES, isFacturXAttachmentName, isFacturXFilespec } from './filespec.js';
+import { detectProfile } from '../xml/guideline.js';
+import { stripBom } from '../validate/shared.js';
+import {
+  FACTURX_ATTACHMENT_NAMES,
+  filespecName,
+  isFacturXAttachmentName,
+  type FacturXAttachmentName,
+} from './filespec.js';
 
 export class FacturXParseError extends Error {
   constructor(message: string) {
@@ -18,7 +25,7 @@ export class FacturXParseError extends Error {
 export async function parse(buffer: Uint8Array): Promise<ParseResult> {
   const pdfDoc = await PDFDocument.load(buffer);
 
-  const rawXml = extractEmbeddedXml(pdfDoc);
+  const { bytes: rawXml } = extractEmbeddedXml(pdfDoc);
   const xml = new TextDecoder('utf-8').decode(rawXml);
   const invoice = deserialize(xml);
   const metadata = extractXmpMetadata(pdfDoc);
@@ -26,7 +33,28 @@ export async function parse(buffer: Uint8Array): Promise<ParseResult> {
   return { invoice, metadata, rawXml };
 }
 
-function extractEmbeddedXml(pdfDoc: PDFDocument): Uint8Array {
+/**
+ * Read the embedded invoice XML out of a PDF, and nothing more.
+ *
+ * Deliberately more permissive than `parse`: it never opens the XMP packet
+ * and never runs the deserializer, so it works on a PDF whose metadata is
+ * missing or malformed, and on a document this library's model cannot
+ * express — reading cannot damage the document, so there is no reason to be
+ * strict about it. The profile comes from the XML's own guideline URN.
+ */
+export async function extract(buffer: Uint8Array): Promise<ExtractResult> {
+  const pdfDoc = await PDFDocument.load(buffer);
+  const { bytes, name } = extractEmbeddedXml(pdfDoc);
+  const profile = detectProfile(stripBom(new TextDecoder('utf-8').decode(bytes)));
+  return { xml: bytes, filename: name, profile };
+}
+
+interface EmbeddedXml {
+  readonly bytes: Uint8Array;
+  readonly name: FacturXAttachmentName;
+}
+
+function extractEmbeddedXml(pdfDoc: PDFDocument): EmbeddedXml {
   const catalog = pdfDoc.catalog;
 
   // 1. Récupérer le tableau /AF (Associated Files)
@@ -39,7 +67,8 @@ function extractEmbeddedXml(pdfDoc: PDFDocument): Uint8Array {
   for (let i = 0; i < af.size(); i++) {
     const fileSpec = af.lookupMaybe(i, PDFDict);
 
-    if (isFacturXFilespec(fileSpec)) {
+    const name = filespecName(fileSpec);
+    if (isFacturXAttachmentName(name)) {
       const ef = fileSpec?.lookupMaybe(PDFName.of('EF'), PDFDict);
       if (!ef) continue;
 
@@ -47,7 +76,7 @@ function extractEmbeddedXml(pdfDoc: PDFDocument): Uint8Array {
       if (!embeddedFileRef) continue;
 
       const stream = pdfDoc.context.lookup(embeddedFileRef) as PDFRawStream;
-      return decodePDFRawStream(stream).decode();
+      return { bytes: decodePDFRawStream(stream).decode(), name };
     }
   }
 

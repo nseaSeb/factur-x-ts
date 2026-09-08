@@ -92,6 +92,35 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 
 `rawXml` is the undecoded attachment bytes, for callers that want to run their own Schematron or archive the original.
 
+## Work with the XML directly
+
+The PDF is a carrier. Every step it wraps is public on its own:
+
+```ts
+import { serialize, deserialize, extract, generate } from 'factur-x-ts';
+import { readFile } from 'node:fs/promises';
+
+// Build CII XML from an invoice, no PDF involved.
+const xml = serialize(invoice, 'EN 16931');
+
+// Parse CII XML received outside a PDF.
+const received = deserialize(xmlString);
+
+// Read the attachment out of a PDF without parsing it.
+const { xml: bytes, profile, filename } = await extract(await readFile('third-party.pdf'));
+
+// Embed ready-made XML — yours, or one you received — into a PDF/A-3.
+const pdfBytes = await generate({ xml: bytes, visualPdf: await readFile('rendered.pdf') });
+```
+
+`serialize` does not validate: it writes what it is given, restricted to what the profile carries. `generate` is the validated path — run `validateEn16931` yourself before `serialize` if you want the same guarantee without the PDF.
+
+`generate({ xml })` embeds the document as given — a `Uint8Array` byte for byte, a string encoded once as UTF-8 — and runs no business validation on it: this path exists precisely for XML the model cannot express, such as a third-party document being re-issued or a national extension. The conformance level written into the XMP packet is read from the XML's own guideline URN; pass `profile` to state it for a URN the library does not know, but a `profile` that *contradicts* a known URN is refused rather than written into a PDF whose metadata and payload disagree. The PDF title is BT-1, read from `rsm:ExchangedDocument/ram:ID` without going through the deserializer. A `<!DOCTYPE>` is refused, as both validators refuse it.
+
+`extract` is deliberately more permissive than `parse`: it never opens the XMP packet and never runs the deserializer, so it works on a PDF whose metadata is missing or malformed, and on a document this library's model cannot express. `profile` comes from the guideline URN in the XML itself, and is `undefined` for a URN the library does not know — never a guess.
+
+`deserialize` is strict to this library's model, and making it public makes that visible: `currency` is a closed `'EUR' | 'USD' | 'GBP'` and `typeCode` a closed `'380' | '381' | '386' | '500'`, so a CHF invoice or a `'503'` down-payment document throws `FacturXDeserializeError`. `extract` plus `generate({ xml })` is the path for a document `deserialize` cannot model — it never needs to.
+
 ## Let the library do the arithmetic
 
 `computeTotals` derives the line amounts, the VAT breakdown and the document
@@ -177,8 +206,12 @@ see [Limitations](#limitations).
 
 | Export | Description |
 | --- | --- |
-| `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice. Throws `FacturXGenerateError`. |
+| `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice, from `{ invoice, profile }` (validated, then serialized) or from `{ xml }` (embedded as given). Throws `FacturXGenerateError`; `FacturXProfileNotDetectedError` when `xml` declares no profile the library knows and none is passed. |
 | `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
+| `extract(buffer)` | `Promise<ExtractResult>` — `{ xml, filename, profile }`, the attachment as it is. Needs neither the XMP packet nor the deserializer, so it reads PDFs `parse` refuses. Throws `FacturXParseError` when the PDF carries no Factur-X attachment. |
+| `serialize(invoice, profile)` | `string` — CII XML, restricted to what the profile carries. Does not validate. |
+| `deserialize(xml)` | `FacturXInvoice` — CII XML into the model. Throws `FacturXDeserializeError` for a document it cannot express. |
+| `detectProfile(xml)`, `detectInvoiceNumber(xml)` | The profile (from the guideline URN) and BT-1, read off raw XML without deserializing; `undefined` when absent or unknown. |
 | `computeTotals(draft, options?)` | `TotalsResult` — derive BT-131, the VAT breakdown and BT-106 to BT-115 from a draft. Returns `{ ok: false, errors }` on a disagreement or on input it refuses to answer; it throws for no input the types allow (`NaN` included, which they do). |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
 | `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled XSD of the document's profile — all five ship one. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
@@ -186,6 +219,7 @@ see [Limitations](#limitations).
 | `Profile` | Const object of the five Factur-X conformance levels. |
 | `atLeast(profile, floor)` | `boolean` — whether `profile` is `floor` or richer, over the five nested profiles. What `serialize` gates on; exported so a caller can ask the same question before building an invoice for a reduced profile. |
 | `FacturXInvoice` and friends | The invoice model. All fields `readonly`. |
+| `GenerateFromInvoiceOptions`, `GenerateFromXmlOptions`, `ExtractResult` | The two `generate` inputs, and what `extract` returns. |
 | `ValidationError`, `ValidationResult` | Shapes returned by EN 16931 business-rule validation. |
 | `DraftInvoice`, `TotalsError`, `TotalsResult` | Shapes taken and returned by `computeTotals`. A `DraftInvoice` is a `FacturXInvoice` with `lineTotal`, `taxBreakdown` amounts and `totals` optional. |
 | `XsdValidationError`, `XsdValidationResult` | Shapes returned by XSD validation. `XsdValidationError` carries xmllint-wasm's `rawMessage` and, when it could parse one out, `location: { fileName, lineNumber }` — both absent for factur-x-ts's own synthetic errors (e.g. the DOCTYPE rejection). |
