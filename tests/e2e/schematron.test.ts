@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { serialize } from '../../src/xml/serializer.js';
+import { computeTotals } from '../../src/totals.js';
 import { validateSchematron } from '../../src/validate/schematron.js';
 import { sampleInvoice } from '../fixtures/invoice.js';
 
@@ -41,6 +42,37 @@ describe('validateSchematron against a live Saxon server', () => {
       const result = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
       expect(result.errors).toEqual([]);
       expect(result.valid).toBe(true);
+    },
+    SAXON_TIMEOUT_MS,
+  );
+
+  it.runIf(SAXON_URL !== undefined)(
+    'accepts an invoice whose arithmetic computeTotals derived',
+    async () => {
+      // The point of the exercise: BR-CO-10 to BR-CO-17 are Schematron rules
+      // the XSD never sees, so the test that matters for `computeTotals` is a
+      // document put in front of Saxon — not a unit test of its own output.
+      // The figures are chosen so the 5.5% group lands off a cent boundary:
+      // 33.33 x 3 = 99.99, and 99.99 at 5.5% is 5.49945, rounded to 5.50. The
+      // allowance is deliberately in the *other* VAT group, so it cannot move
+      // that basis and blunt the case.
+      const { lines: _lines, taxBreakdown: _taxBreakdown, totals: _totals, ...header } = sampleInvoice();
+      const result = computeTotals({
+        ...header,
+        lines: [
+          { id: '1', name: 'Prestation', quantity: 3, unit: 'C62', netPrice: 33.33, vatCategory: 'S', vatRate: 5.5 },
+          { id: '2', name: 'Livraison', quantity: 1, unit: 'C62', netPrice: 12.5, vatCategory: 'S', vatRate: 20 },
+        ],
+        allowances: [{ amount: 4.44, reason: 'Remise commerciale', vatCategory: 'S', vatRate: 20 }],
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      const xml = serialize(result.invoice, 'EN 16931');
+      const report = await validateSchematron(xml, { endpoint: SAXON_URL, timeoutMs: SAXON_TIMEOUT_MS });
+      expect(report.errors).toEqual([]);
+      expect(report.valid).toBe(true);
     },
     SAXON_TIMEOUT_MS,
   );

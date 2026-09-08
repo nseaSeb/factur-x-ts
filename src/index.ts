@@ -20,6 +20,13 @@ export type {
   ParseResult,
   GenerateOptions,
   FacturXMetadata,
+  DraftInvoice,
+  DraftLineItem,
+  DraftTaxBreakdown,
+  TotalsError,
+  TotalsErrorCode,
+  TotalsOptions,
+  TotalsResult,
 } from './types/index.js';
 export { Profile } from './types/index.js';
 
@@ -36,6 +43,7 @@ export type {
   SchematronValidationOptions,
 } from './types/index.js';
 export { validateEn16931, VAT_POINT_DATE_CODES } from './profiles/en16931.js';
+export { computeTotals } from './totals.js';
 export { BUSINESS_PROCESS_CODES } from './profiles/fr.js';
 export { validateXsd, FacturXXsdNotBundledError } from './validate/xsd.js';
 export {
