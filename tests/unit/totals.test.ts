@@ -304,6 +304,37 @@ describe('computeTotals', () => {
     expect(result.invoice.taxBreakdown[0]!.calculatedAmount).toBe(5.5);
   });
 
+  it('accepts a complete, internally consistent set from a decimal-based caller', () => {
+    // 53.50 at 5% is 2.675: 2.67 by float representation here, 2.68 half-up in
+    // a Decimal system. Slacking BT-117 alone would be pointless — the caller
+    // states the totals built on it too, and comparing *those* exactly would
+    // refuse the whole document the Schematron accepts.
+    const result = computeTotals(
+      draft([line({ netPrice: 53.5, quantity: 1, vatRate: 5 })], {
+        taxBreakdown: [{ category: 'S', rate: 5, basisAmount: 53.5, calculatedAmount: 2.68 }],
+        totals: { lineTotal: 53.5, taxBasisTotal: 53.5, taxTotal: 2.68, grandTotal: 56.18, duePayable: 56.18 },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Accepted, but the derived figures are still what land in the document.
+    expect(result.invoice.totals.taxTotal).toBe(2.67);
+    expect(result.invoice.totals.grandTotal).toBe(56.17);
+  });
+
+  it('still reports a VAT-derived total off by more than a cent per group', () => {
+    const result = computeTotals(
+      draft([line({ netPrice: 53.5, quantity: 1, vatRate: 5 })], {
+        totals: { grandTotal: 56.2 },
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toMatchObject([{ field: 'totals.grandTotal', given: 56.2, computed: 56.17 }]);
+  });
+
   it('still reports a stated BT-117 that is off by more than a cent', () => {
     const result = computeTotals(
       draft([line({ netPrice: 33.33, quantity: 3, vatRate: 5.5 })], {

@@ -127,7 +127,10 @@ function buildLineItem(line: LineItem, profile: Profile): string {
     ...(line.charges ?? []).map((ac) => buildTradeAllowanceCharge(ac, true)),
   ].join('');
 
-  const description = line.description ? el('ram:Description', line.description) : '';
+  // BT-154 starts at EN 16931: BASIC's TradeProductType declares GlobalID and
+  // Name and nothing else, so a description there is an XSD error.
+  const description =
+    line.description && atLeast(profile, 'EN 16931') ? el('ram:Description', line.description) : '';
 
   const extended = atLeast(profile, 'EXTENDED');
   const shipTo = extended && line.shipTo ? buildTradeParty(line.shipTo, 'ram:ShipToTradeParty', profile) : '';

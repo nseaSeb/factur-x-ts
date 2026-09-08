@@ -28,7 +28,7 @@ export type {
   TotalsOptions,
   TotalsResult,
 } from './types/index.js';
-export { Profile } from './types/index.js';
+export { Profile, atLeast } from './types/index.js';
 
 export type {
   ValidationError,

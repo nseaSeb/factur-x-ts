@@ -301,8 +301,18 @@ function deriveTotals(
 
 // --- reporting what the caller had that we disagree with ---------------------
 
+// The three totals that inherit BT-117's rounding: BT-110 is the sum of the
+// calculated amounts, and BT-112 and BT-115 are built on it. Each group's own
+// BT-117 is accepted within a cent (see `withinACent`), so their sum can differ
+// legitimately by a cent per group — comparing these exactly would cancel that
+// slack and refuse the very documents it exists to accept. The other four
+// totals are sums of amounts the caller supplied verbatim, with no rate
+// multiplication and so no rounding tie: those stay exact.
+const VAT_DERIVED_TOTALS: readonly (typeof REPORTED_TOTALS)[number][] = ['taxTotal', 'grandTotal', 'duePayable'];
+
 function compare(draft: DraftInvoice, computed: FacturXInvoice): TotalsError[] {
   const errors: TotalsError[] = [];
+  const vatTolerance = 0.01 * computed.taxBreakdown.length;
 
   for (const key of REPORTED_TOTALS) {
     const given = draft.totals?.[key];
@@ -310,7 +320,10 @@ function compare(draft: DraftInvoice, computed: FacturXInvoice): TotalsError[] {
     // `?? 0` and not a skip: a stated BT-107 that the derived document drops for
     // want of any allowance group is precisely the BR-CO-11 disagreement.
     const value = computed.totals[key] ?? 0;
-    if (!isClose(given, value)) errors.push(mismatch(`totals.${key}`, given, value));
+    const agrees = VAT_DERIVED_TOTALS.includes(key)
+      ? within(given, value, vatTolerance)
+      : isClose(given, value);
+    if (!agrees) errors.push(mismatch(`totals.${key}`, given, value));
   }
 
   // Driven from the derived lines, which are a 1:1 map of the draft's: indexing
@@ -345,7 +358,11 @@ function compare(draft: DraftInvoice, computed: FacturXInvoice): TotalsError[] {
 }
 
 function withinACent(given: number, computed: number): boolean {
-  return Math.abs(round2(given) - round2(computed)) <= 0.01 + 1e-9;
+  return within(given, computed, 0.01);
+}
+
+function within(given: number, computed: number, tolerance: number): boolean {
+  return Math.abs(round2(given) - round2(computed)) <= tolerance + 1e-9;
 }
 
 function mismatch(field: string, given: number, computed: number): TotalsError {

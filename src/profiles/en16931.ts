@@ -9,6 +9,7 @@ import type {
   ValidationResult,
 } from '../types/validation.js';
 import { isClose, round2, snapNearZero } from '../amounts.js';
+import { atLeast, type Profile } from '../types/profiles.js';
 import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformVatPointDate } from './fr.js';
 
 export type { ValidationError, ValidationErrorCode, ValidationOptions, ValidationResult };
@@ -336,4 +337,46 @@ function validatePaymentTerms(invoice: FacturXInvoice, errors: ValidationError[]
 
 function field(fieldName: string, code: ValidationErrorCode, message: string): ValidationError {
   return { field: fieldName, code, message };
+}
+
+
+/**
+ * What a profile's own XSD requires, for the profiles `validateEn16931` does
+ * not cover.
+ *
+ * `generate` runs the full EN 16931 rule set for `EN 16931` only — the reduced
+ * profiles legitimately omit fields it requires — but "reduced" is not
+ * "anything goes": three elements have no `minOccurs="0"` in the BASIC WL and
+ * BASIC schemas, and a document missing them is not a lax invoice but an
+ * invalid one. Read off the bundled schemas, not assumed.
+ *
+ * This matters because the reduced profiles are now reachable from data this
+ * library itself produces: `parse` on a MINIMUM PDF yields an invoice with no
+ * `totals.lineTotal` and an empty `taxBreakdown`, and re-generating that at
+ * BASIC WL would otherwise write an XSD-invalid PDF without a word.
+ */
+export function validateProfileStructure(invoice: FacturXInvoice, profile: Profile): ValidationResult {
+  const errors: ValidationError[] = [];
+
+  // MINIMUM's summation has no ram:LineTotalAmount and its settlement no
+  // ram:ApplicableTradeTax at all, so neither is required there.
+  if (atLeast(profile, 'BASIC WL')) {
+    if (invoice.totals.lineTotal === undefined) {
+      errors.push(
+        field('totals.lineTotal', 'MISSING_FIELD', `totals.lineTotal (BT-106) is mandatory in the ${profile} schema`),
+      );
+    }
+    if (invoice.taxBreakdown.length === 0) {
+      errors.push(
+        field('taxBreakdown', 'NO_TAX_BREAKDOWN', `The ${profile} schema requires at least one VAT breakdown group (BG-23)`),
+      );
+    }
+  }
+
+  // BASIC WL is "without lines" — the element does not exist there.
+  if (atLeast(profile, 'BASIC') && invoice.lines.length === 0) {
+    errors.push(field('lines', 'NO_LINES', `The ${profile} schema requires at least one line (BG-25)`));
+  }
+
+  return { valid: errors.length === 0, errors };
 }

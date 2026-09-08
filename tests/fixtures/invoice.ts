@@ -112,3 +112,69 @@ export function expectedRoundTrip(invoice: FacturXInvoice): FacturXInvoice {
     })),
   };
 }
+
+/**
+ * Every field the model carries, on one invoice.
+ *
+ * `sampleInvoice` is deliberately ordinary, which makes it blind to a field
+ * that no profile-gating covers: serializing it at BASIC was XSD-clean while
+ * `ram:Description` was ungated, simply because it has no line description.
+ * The per-profile XSD check runs against this one instead.
+ *
+ * The amounts are not arithmetically consistent and are not meant to be — this
+ * exists for structural checks, not business rules.
+ */
+export function maximalInvoice(): FacturXInvoice {
+  const base = sampleInvoice();
+  return {
+    ...base,
+    taxRepresentative: {
+      name: 'Représentant Fiscal SAS',
+      vatId: 'FR99999999999',
+      address: { lineOne: '9 rue du Fisc', postcode: '75009', city: 'Paris', country: 'FR' },
+    },
+    seller: { ...base.seller, globalId: '123456789', globalScheme: '0231' },
+    buyer: {
+      ...base.buyer,
+      vatId: 'FR98765432109',
+      contact: { name: 'Marie Martin', phone: '+33123456789', email: 'marie@example.com' },
+    },
+    notes: [{ content: 'Escompte 2% sous 8 jours', subjectCode: 'AAB' }],
+    billingPeriod: { startDate: new Date(Date.UTC(2026, 6, 1)), endDate: new Date(Date.UTC(2026, 6, 31)) },
+    paymentDueDate: new Date(Date.UTC(2026, 8, 8)),
+    paymentMeans: [
+      {
+        typeCode: '58',
+        iban: 'FR7630006000011234567890189',
+        accountName: 'ACME SARL',
+        bic: 'BNPAFRPPXXX',
+        payerIban: 'FR7630006000011234567890190',
+        cardId: '123456',
+        cardholderName: 'JEAN DUPONT',
+      },
+    ],
+    charges: [{ amount: 3, reason: 'Frais de port', reasonCode: 'FC', vatCategory: 'S', vatRate: 20 }],
+    lines: [
+      {
+        ...base.lines[0]!,
+        description: 'Conseil stratégique, forfait mensuel',
+        notes: [{ content: 'Livré en deux temps', subjectCode: 'AAI' }],
+        shipTo: {
+          name: 'Entrepôt Nord',
+          address: { lineOne: '5 quai du Nord', postcode: '59000', city: 'Lille', country: 'FR' },
+        },
+        deliveryDate: new Date(Date.UTC(2026, 7, 1)),
+        precedingInvoice: { number: 'INV-2025-998', issueDate: new Date(Date.UTC(2025, 10, 1)) },
+        allowances: [{ amount: 2, reason: 'Geste commercial', vatCategory: 'S', vatRate: 20 }],
+        charges: [{ amount: 1, reason: 'Emballage', vatCategory: 'S', vatRate: 20 }],
+      },
+    ],
+    taxBreakdown: [
+      {
+        ...base.taxBreakdown[0]!,
+        exemptionReason: undefined,
+      },
+    ],
+    totals: { ...base.totals, chargeTotal: 3, prepaid: 50 },
+  };
+}

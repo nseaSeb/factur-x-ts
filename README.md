@@ -154,11 +154,15 @@ answered with a number that means nothing:
   propagate through every sum and be serialized as
   `<ram:GrandTotalAmount>NaN</ram:GrandTotalAmount>`.
 
-One comparison is deliberately looser than the rest: a supplied BT-117
-(`calculatedAmount`) is accepted within a cent of the derived one. It is the one
-figure two correct implementations can legitimately disagree on — see the
-rounding note under [Limitations](#limitations). Every other comparison is
-exact after rounding to the cent, as the Schematron's own sum rules are.
+Four comparisons are deliberately looser than the rest. A supplied BT-117
+(`calculatedAmount`) is accepted within a cent of the derived one — it is the
+one figure two correct implementations can legitimately disagree on, see the
+rounding note under [Limitations](#limitations) — and BT-110, BT-112 and BT-115
+(`taxTotal`, `grandTotal`, `duePayable`) within a cent per VAT breakdown group,
+since they are built on it and comparing them exactly would cancel the slack on
+the figures they sum. The other four totals are sums of amounts you supplied
+verbatim, with no rate multiplication and so no rounding tie: those stay exact
+after rounding to the cent, as the Schematron's own sum rules are.
 
 An entry you supplied is completed, never replaced: BT-120 and BT-121 (the VAT
 exemption reason and its code) cannot be derived from amounts, and category `E`
@@ -318,6 +322,7 @@ the Elixir sibling's `Facturx.CII`:
 | `BASIC WL` | `ram:GlobalID`; every address field but `ram:CountryID`; any party's address but the seller's | `globalId`, `address` |
 | `BASIC` | `ram:IncludedSupplyChainTradeLineItem` | `lines` |
 | `EN 16931` | `ram:DefinedTradeContact` | `contact` |
+| `EN 16931` | `ram:Description` (BT-154) — BASIC's `TradeProductType` declares `GlobalID` and `Name` and nothing else | `lines[].description` |
 | `EN 16931` | `ram:ApplicableTradeSettlementFinancialCard`, `ram:AccountName`, `ram:BICID` | `paymentMeans[].cardId`/`.cardholderName`, `.accountName`, `.bic` |
 | `EXTENDED` | The four French line extensions below | `lines[].notes`/`.shipTo`/`.deliveryDate`/`.precedingInvoice` |
 
@@ -340,9 +345,15 @@ country.
 > mandate requires on its target trajectory (BG-25). Neither is a valid French
 > e-invoice; `BASIC` is the leanest profile that is.
 
-Only `EN 16931` runs the full mandatory-field validation before generating. The
-code-list rules (BT-8, and BT-23 under `validateFrenchRules`) run whatever the
-profile, since both are serialized wherever the profile carries them.
+Only `EN 16931` runs the full mandatory-field validation before generating.
+Two narrower sets run whatever the profile: the code-list rules (BT-8, and
+BT-23 under `validateFrenchRules`), since both are serialized wherever the
+profile carries them, and what the profile's own XSD makes mandatory —
+`ram:LineTotalAmount` and at least one `ram:ApplicableTradeTax` from `BASIC WL`
+up, at least one line from `BASIC` up. "Reduced" is not "anything goes", and
+this path is reachable from the library's own output: `parse` on a `MINIMUM`
+PDF gives back an invoice with neither, so re-issuing it at `BASIC WL` is
+refused rather than written as an XSD-invalid PDF.
 
 ### EXTENDED-only line fields (EXT-FR-FE-\*)
 
