@@ -75,7 +75,16 @@ export interface TradeParty {
   readonly globalId?: string;
   /** BT-29d-1 — schéma de `globalId`. Défaut `'0231'` sur le vendeur seul. */
   readonly globalScheme?: string;
-  readonly address: PostalAddress;
+  /**
+   * BG-5 / BG-8 — postal address.
+   *
+   * Optional because MINIMUM carries the seller's address and refuses every
+   * other party's (BR-08 / BR-09 require the seller's; the buyer's is not in
+   * the profile at all), so a party read back from such a document has none.
+   * Required for both seller and buyer at EN 16931, where `validateEn16931`
+   * enforces it.
+   */
+  readonly address?: PostalAddress;
   readonly contact?: TradeContact;
 }
 
@@ -157,7 +166,15 @@ export interface TaxBreakdown {
 }
 
 export interface MonetaryTotals {
-  readonly lineTotal: number;
+  /**
+   * BT-106 — sum of the line net amounts.
+   *
+   * Optional because MINIMUM has no `ram:LineTotalAmount`: it carries no lines,
+   * and stating a sum of nothing as 0 would be a fabricated figure rather than
+   * a missing one. Mandatory at EN 16931 (BR-CO-10), where `validateEn16931`
+   * requires it.
+   */
+  readonly lineTotal?: number;
   readonly allowanceTotal?: number;
   readonly chargeTotal?: number;
   readonly taxBasisTotal: number;

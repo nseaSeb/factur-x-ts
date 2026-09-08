@@ -44,8 +44,38 @@ describe('generate -> parse round-trip', () => {
     const pdfBytes = await generate({ invoice, profile: 'BASIC', visualPdf });
     const result = await parse(pdfBytes);
 
-    expect(result.invoice).toEqual(expectedRoundTrip(invoice));
+    // BG-6 (DefinedTradeContact) starts at EN 16931: BASIC's TradePartyType has
+    // no such element, so the seller contact is not on the wire to read back.
+    // Everything else survives.
+    const { contact: _contact, ...sellerWithoutContact } = invoice.seller;
+    expect(result.invoice).toEqual({ ...expectedRoundTrip(invoice), seller: sellerWithoutContact });
     expect(result.metadata.conformanceLevel).toBe('BASIC');
+  });
+
+  it('round-trips a MINIMUM document, which carries neither lines nor VAT breakdown', async () => {
+    // The reduced profiles drop whole blocks, so the deserializer meets absent
+    // ram:IncludedSupplyChainTradeLineItem and ram:ApplicableTradeTax paths —
+    // a different case from the single-object-instead-of-array one.
+    const pdfBytes = await generate({ invoice: sampleInvoice(), profile: 'MINIMUM' });
+    const result = await parse(pdfBytes);
+
+    expect(result.metadata.conformanceLevel).toBe('MINIMUM');
+    expect(result.invoice.lines).toEqual([]);
+    expect(result.invoice.taxBreakdown).toEqual([]);
+    // BT-8 lives inside ram:ApplicableTradeTax, so it has nowhere to sit here.
+    expect(result.invoice.taxDueDateTypeCode).toBeUndefined();
+    // The four amounts MINIMUM does keep.
+    expect(result.invoice.totals).toEqual({
+      taxBasisTotal: 195,
+      taxTotal: 39,
+      grandTotal: 234,
+      duePayable: 234,
+    });
+    expect(result.invoice.seller.name).toBe('Ma Société SARL');
+    // BG-5 belongs to the seller alone in MINIMUM: the buyer has no address at
+    // all on the wire, and none is invented on the way back.
+    expect(result.invoice.buyer.address).toBeUndefined();
+    expect(result.invoice.seller.address).toEqual({ country: 'FR' });
   });
 
   it('produces a PDF using no cross-reference/object streams', async () => {

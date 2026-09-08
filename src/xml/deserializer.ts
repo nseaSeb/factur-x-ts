@@ -366,22 +366,26 @@ function normalizeVatPointDate(breakdown: TaxBreakdown[]): {
 function parseTradeParty(node: ParsedTradeParty): TradeParty {
   if (!node.Name) throw new FacturXDeserializeError('Missing ram:Name in trade party');
   const address = node.PostalTradeAddress;
-  // Only CountryID is mandatory in the CII schema and EN 16931's own
-  // Schematron (see PostalAddress in types/invoice.ts) — requiring the rest
-  // here would reject a legitimate reduced-profile or third-party document
-  // that only ever had a country.
-  if (!address?.CountryID) {
+  // A party with no ram:PostalTradeAddress at all is legitimate: MINIMUM gives
+  // one to the seller and to nobody else. One that *has* the element must
+  // carry a country — only CountryID is mandatory in the CII schema and in
+  // EN 16931's own Schematron (see PostalAddress in types/invoice.ts), so
+  // requiring the rest would reject a document that only ever had a country.
+  if (address !== undefined && !address.CountryID) {
     throw new FacturXDeserializeError(`Missing ram:PostalTradeAddress/ram:CountryID for ${node.Name}`);
   }
 
-  const postalAddress: PostalAddress = {
-    ...(address.LineOne ? { lineOne: address.LineOne } : {}),
-    ...(address.LineTwo ? { lineTwo: address.LineTwo } : {}),
-    ...(address.LineThree ? { lineThree: address.LineThree } : {}),
-    ...(address.PostcodeCode ? { postcode: address.PostcodeCode } : {}),
-    ...(address.CityName ? { city: address.CityName } : {}),
-    country: address.CountryID,
-  };
+  const postalAddress: PostalAddress | undefined =
+    address?.CountryID === undefined
+      ? undefined
+      : {
+          ...(address.LineOne ? { lineOne: address.LineOne } : {}),
+          ...(address.LineTwo ? { lineTwo: address.LineTwo } : {}),
+          ...(address.LineThree ? { lineThree: address.LineThree } : {}),
+          ...(address.PostcodeCode ? { postcode: address.PostcodeCode } : {}),
+          ...(address.CityName ? { city: address.CityName } : {}),
+          country: address.CountryID,
+        };
 
   const vatId = textOf(node.SpecifiedTaxRegistration?.ID);
   const contact = parseTradeContact(node.DefinedTradeContact);
@@ -402,7 +406,7 @@ function parseTradeParty(node: ParsedTradeParty): TradeParty {
     ...(legalScheme ? { legalScheme } : {}),
     ...(globalId ? { globalId } : {}),
     ...(globalScheme ? { globalScheme } : {}),
-    address: postalAddress,
+    ...(postalAddress !== undefined ? { address: postalAddress } : {}),
     ...(contact ? { contact } : {}),
   };
 }
@@ -544,8 +548,10 @@ function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown {
 }
 
 function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals {
+  // BT-106 is not in the required set: MINIMUM's summation carries four
+  // amounts and no ram:LineTotalAmount, so demanding it here would make every
+  // MINIMUM document unreadable. The four below are the ones every profile has.
   if (
-    node.LineTotalAmount === undefined ||
     node.TaxBasisTotalAmount === undefined ||
     node.TaxTotalAmount === undefined ||
     node.GrandTotalAmount === undefined ||
@@ -554,12 +560,13 @@ function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals {
     throw new FacturXDeserializeError('Incomplete ram:SpecifiedTradeSettlementHeaderMonetarySummation');
   }
 
+  const lineTotal = parseOptionalAmount(node.LineTotalAmount);
   const allowanceTotal = parseOptionalAmount(node.AllowanceTotalAmount);
   const chargeTotal = parseOptionalAmount(node.ChargeTotalAmount);
   const prepaid = parseOptionalAmount(node.TotalPrepaidAmount);
 
   return {
-    lineTotal: requireAmount(node.LineTotalAmount, 'LineTotalAmount'),
+    ...(lineTotal !== undefined ? { lineTotal } : {}),
     ...(allowanceTotal !== undefined ? { allowanceTotal } : {}),
     ...(chargeTotal !== undefined ? { chargeTotal } : {}),
     taxBasisTotal: requireAmount(node.TaxBasisTotalAmount, 'TaxBasisTotalAmount'),
