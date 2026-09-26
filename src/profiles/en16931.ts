@@ -8,7 +8,7 @@ import type {
   ValidationOptions,
   ValidationResult,
 } from '../types/validation.js';
-import { abs, add, cmp, dec, eq, mul, percentOf, round, sign, sub, sum, toFixed, ZERO, type Decimal } from '../decimal.js';
+import { abs, add, cmp, dec, eq, mul, parseDecimal, percentOf, round, sign, sub, sum, toFixed, ZERO, type Decimal } from '../decimal.js';
 import { normalizeInvoice } from '../normalize.js';
 import { atLeast, type Profile } from '../types/profiles.js';
 import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformVatPointDate } from './fr.js';
@@ -54,6 +54,7 @@ export function validateCodeLists(invoice: FacturXInvoice, options: ValidationOp
   const { validateVatPointDate = true, validateFrenchRules = false } = options;
   const errors: ValidationError[] = [];
 
+  validateCurrencies(invoice, errors);
   if (validateVatPointDate) validateVatPointDateCodes(invoice, errors);
   if (validateFrenchRules) {
     validateFrenchBusinessProcess(invoice, errors);
@@ -123,6 +124,25 @@ export function validateEn16931(source: FacturXInvoice, options: ValidationOptio
   errors.push(...validateCodeLists(invoice, options).errors);
 
   return { valid: errors.length === 0, errors };
+}
+
+// Shape only, not the ISO 4217 list, which the Schematron checks (BR-CL-04,
+// BR-CL-05). A lower-case or three-digit code is a bug, not an unknown currency.
+function validateCurrencies(invoice: FacturXInvoice, errors: ValidationError[]): void {
+  if (!/^[A-Z]{3}$/.test(invoice.currency)) {
+    errors.push(field('currency', 'INVALID_CURRENCY_CODE', `currency "${invoice.currency}" is not an ISO 4217 code (three upper-case letters)`));
+  }
+  if (invoice.taxCurrency === undefined) return;
+  if (!/^[A-Z]{3}$/.test(invoice.taxCurrency)) {
+    errors.push(
+      field('taxCurrency', 'INVALID_CURRENCY_CODE', `taxCurrency "${invoice.taxCurrency}" is not an ISO 4217 code (three upper-case letters)`),
+    );
+  } else if (invoice.taxCurrency === invoice.currency) {
+    // The Schematron tells BT-110 and BT-111 apart by currency alone.
+    errors.push(
+      field('taxCurrency', 'INVALID_CURRENCY_CODE', 'taxCurrency (BT-6) must differ from currency (BT-5); omit it for a single-currency invoice'),
+    );
+  }
 }
 
 /** BR-CL-06, plus the case where a document-level BT-8 has nowhere to be emitted. */
@@ -303,9 +323,21 @@ function validateAmounts(invoice: ParsedInvoice, errors: ValidationError[]): voi
     errors.push(field('totals.grandTotal', 'AMOUNT_MISMATCH', 'grandTotal must equal taxBasisTotal + taxTotal (BR-CO-15)'));
   }
 
-  const expectedDuePayable = sub(dec(totals.grandTotal), optional(totals.prepaid));
+  const expectedDuePayable = add(sub(dec(totals.grandTotal), optional(totals.prepaid)), optional(totals.rounding));
   if (!sameCents(expectedDuePayable, dec(totals.duePayable))) {
-    errors.push(field('totals.duePayable', 'AMOUNT_MISMATCH', 'duePayable must equal grandTotal - prepaid (BR-CO-16)'));
+    errors.push(field('totals.duePayable', 'AMOUNT_MISMATCH', 'duePayable must equal grandTotal - prepaid + rounding (BR-CO-16)'));
+  }
+
+  // BR-53: a VAT accounting currency comes with the VAT total expressed in it.
+  if (invoice.taxCurrency !== undefined && totals.taxTotalInTaxCurrency === undefined) {
+    errors.push(
+      field('totals.taxTotalInTaxCurrency', 'MISSING_FIELD', 'taxCurrency (BT-6) is set: taxTotalInTaxCurrency (BT-111) is required (BR-53)'),
+    );
+  }
+  if (invoice.taxCurrency === undefined && totals.taxTotalInTaxCurrency !== undefined) {
+    errors.push(
+      field('taxCurrency', 'MISSING_FIELD', 'taxTotalInTaxCurrency (BT-111) is set: taxCurrency (BT-6) must say which currency it is in'),
+    );
   }
 }
 
@@ -404,6 +436,24 @@ export function validateProfileStructure(invoice: FacturXInvoice, profile: Profi
   // BASIC WL is "without lines" — the element does not exist there.
   if (atLeast(profile, 'BASIC') && invoice.lines.length === 0) {
     errors.push(field('lines', 'NO_LINES', `The ${profile} schema requires at least one line (BG-25)`));
+  }
+
+  // BT-114 has no element below EN 16931, but it is part of BR-CO-16: dropping
+  // a non-zero rounding amount would leave a document whose amount due no
+  // longer follows from its total, which the profile's own rules reject.
+  // Found by running such a document through the BASIC WL Schematron.
+  const rounding = invoice.totals.rounding;
+  if (!atLeast(profile, 'EN 16931') && rounding !== undefined) {
+    const parsed = parseDecimal(rounding);
+    if (parsed.ok && sign(parsed.value) !== 0) {
+      errors.push(
+        field(
+          'totals.rounding',
+          'UNEMITTABLE_ROUNDING_AMOUNT',
+          `The ${profile} schema has no ram:RoundingAmount (BT-114), so a non-zero rounding cannot be carried and duePayable would contradict BR-CO-16 — fold it into the amounts, or use EN 16931 or EXTENDED`,
+        ),
+      );
+    }
   }
 
   return { valid: errors.length === 0, errors };

@@ -15,9 +15,13 @@ export type ValidationErrorCode =
   | 'AMOUNT_MISMATCH'
   // NaN, Infinity, a malformed string, or a number showing float drift.
   | 'INVALID_DECIMAL'
+  // ISO 4217 shape of BT-5 / BT-6, and BT-6 differing from BT-5.
+  | 'INVALID_CURRENCY_CODE'
   // BR-CL-06: BT-8 restricted by EN 16931 to a subset of UNTDID 2475.
   | 'INVALID_VAT_POINT_DATE'
   | 'UNEMITTABLE_VAT_POINT_DATE'
+  // BT-114 set on a profile below EN 16931, which has no element for it.
+  | 'UNEMITTABLE_ROUNDING_AMOUNT'
   // French reform (opt-in): G1.02, G1.60, S1.13, BT-30 / BT-47.
   | 'MISSING_BUSINESS_PROCESS'
   | 'INVALID_BUSINESS_PROCESS'

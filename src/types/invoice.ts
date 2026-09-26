@@ -20,6 +20,14 @@ export interface FacturXInvoice<D extends DecimalInput = DecimalInput> {
   readonly currency: CurrencyCode;
   readonly typeCode: DocumentTypeCode;
 
+  /**
+   * BT-6 — the VAT accounting currency, when it differs from `currency`.
+   * Requires `totals.taxTotalInTaxCurrency` (BR-53) and must not equal
+   * `currency`: the Schematron tells BT-110 and BT-111 apart by their
+   * currency, so two identical ones are rejected. BASIC WL and above.
+   */
+  readonly taxCurrency?: string;
+
   readonly seller: TradeParty;
   readonly buyer: TradeParty;
   /** BG-11 — représentant fiscal du vendeur. Seul son `vatId` (BT-63) est réglementaire. */
@@ -40,6 +48,14 @@ export interface FacturXInvoice<D extends DecimalInput = DecimalInput> {
 
   readonly notes?: Note[];
   readonly billingPeriod?: BillingPeriod;
+  /**
+   * BG-13 — where the goods or services were delivered, when that is not the
+   * buyer's address: BT-70 (`name`), BT-71 (`globalId`) and BG-15
+   * (`address`). BASIC WL and above.
+   */
+  readonly shipTo?: TradeParty;
+  /** BT-72 — the actual delivery date. BASIC WL and above. */
+  readonly deliveryDate?: Date;
   readonly paymentMeans?: PaymentMean[];
   readonly precedingInvoices?: PrecedingInvoice[];
 
@@ -64,8 +80,32 @@ export type ParsedInvoice = FacturXInvoice<string>;
 
 // ---- Types auxiliaires ----
 
-export type CurrencyCode = 'EUR' | 'USD' | 'GBP';
-export type DocumentTypeCode = '380' | '381' | '386' | '500';
+/**
+ * ISO 4217 alphabetic code. Any three upper-case letters are accepted; the
+ * named ones are only there for autocompletion.
+ */
+// `string & {}` keeps the literals offered by autocompletion instead of
+// collapsing the whole union into `string`.
+export type CurrencyCode = 'EUR' | 'USD' | 'GBP' | 'CHF' | (string & {});
+/**
+ * BT-3, UNTDID 1001. The named codes are the common French ones: invoice
+ * (380), credit note (381), corrected invoice (384), prepayment invoice
+ * (386), self-billed invoice (389), factored invoice (393) and the
+ * self-billed / factored variants (500–503). Any code is accepted; the
+ * Schematron checks the list (BR-CL-01).
+ */
+export type DocumentTypeCode =
+  | '380'
+  | '381'
+  | '384'
+  | '386'
+  | '389'
+  | '393'
+  | '500'
+  | '501'
+  | '502'
+  | '503'
+    | (string & {});
 
 export interface TradeParty {
   readonly name: string;
@@ -119,6 +159,8 @@ export interface PostalAddress {
   readonly postcode?: string;
   readonly city?: string;
   readonly country: string; // ISO 3166-1 alpha-2
+  /** BT-39 / BT-54 / BT-68 / BT-79 — region, county or state. BASIC WL and above. */
+  readonly countrySubdivision?: string;
 }
 
 export interface TradeContact {
@@ -154,11 +196,21 @@ export interface LineItem<D extends DecimalInput = DecimalInput> {
   readonly shipTo?: TradeParty;
   /** EXT-FR-FE-BG-11 — delivery date specific to this line. EXTENDED only. */
   readonly deliveryDate?: Date;
+  /**
+   * BG-26 — the period this line covers. BASIC and above. Note BR-FX-EN-04
+   * (DE-to-DE only) is a conjunction a line period alone does not satisfy.
+   */
+  readonly billingPeriod?: BillingPeriod;
   /** EXT-FR-FE-BG-06 — preceding invoice reference specific to this line, distinct from the document-level `precedingInvoices`. EXTENDED only. */
   readonly precedingInvoice?: PrecedingInvoice;
 }
 
-export type VatCategoryCode = 'S' | 'E' | 'Z' | 'G' | 'O' | 'K' | 'AE';
+/**
+ * UNCL 5305, as EN 16931 restricts it: standard (S), zero-rated (Z), exempt (E),
+ * reverse charge (AE), intra-community (K), export (G), outside scope (O),
+ * Canary Islands IGIC (L) and Ceuta/Melilla IPSI (M).
+ */
+export type VatCategoryCode = 'S' | 'E' | 'Z' | 'G' | 'O' | 'K' | 'AE' | 'L' | 'M';
 
 export interface AllowanceCharge<D extends DecimalInput = DecimalInput> {
   readonly amount: D;
@@ -195,6 +247,18 @@ export interface MonetaryTotals<D extends DecimalInput = DecimalInput> {
   readonly chargeTotal?: D;
   readonly taxBasisTotal: D;
   readonly taxTotal: D;
+  /**
+   * BT-111 — the VAT total restated in `taxCurrency`. Required when
+   * `taxCurrency` is set (BR-53), never derived: it needs an exchange rate
+   * this library does not have.
+   */
+  readonly taxTotalInTaxCurrency?: D;
+  /**
+   * BT-114 — rounding applied to the amount due, e.g. to a cash unit.
+   * `duePayable = grandTotal - prepaid + rounding` (BR-CO-16). EN 16931 and
+   * above.
+   */
+  readonly rounding?: D;
   readonly grandTotal: D;
   readonly prepaid?: D;
   readonly duePayable: D;
@@ -212,6 +276,13 @@ export interface BillingPeriod {
 
 export interface PaymentMean {
   readonly typeCode: string; // UNTDID 4461
+  /** BT-82 — the payment means in words, e.g. 'Virement SEPA'. EN 16931 and above. */
+  readonly information?: string;
+  /**
+   * BT-84 in its non-IBAN form — an account identifier that is not an IBAN.
+   * Written as `ram:ProprietaryID`. BASIC WL and above.
+   */
+  readonly accountId?: string;
   readonly iban?: string;
   readonly accountName?: string;
   readonly bic?: string;

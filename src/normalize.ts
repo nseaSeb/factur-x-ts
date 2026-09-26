@@ -134,6 +134,8 @@ function convertDecimals(source: FacturXInvoice | DraftInvoice, convert: Convert
       chargeTotal: opt(totals.chargeTotal, 'totals.chargeTotal'),
       taxBasisTotal: opt(totals.taxBasisTotal as DecimalInput | undefined, 'totals.taxBasisTotal'),
       taxTotal: opt(totals.taxTotal as DecimalInput | undefined, 'totals.taxTotal'),
+      taxTotalInTaxCurrency: opt(totals.taxTotalInTaxCurrency, 'totals.taxTotalInTaxCurrency'),
+      rounding: opt(totals.rounding, 'totals.rounding'),
       grandTotal: opt(totals.grandTotal as DecimalInput | undefined, 'totals.grandTotal'),
       prepaid: opt(totals.prepaid, 'totals.prepaid'),
       duePayable: opt(totals.duePayable as DecimalInput | undefined, 'totals.duePayable'),

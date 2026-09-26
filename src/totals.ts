@@ -57,10 +57,11 @@ const REPORTED_TOTALS = [
  * showing arithmetic drift — is reported as `INVALID_DECIMAL`, every one of
  * them, before anything is computed.
  *
- * Two amounts are never derived, because nothing in the invoice determines
- * them: BT-113 (`prepaid`) is carried through as given, and BT-114 (the
- * rounding amount) has no field in `MonetaryTotals` yet, so `duePayable` is
- * `grandTotal - prepaid` exactly as `validateEn16931` asserts it (BR-CO-16).
+ * Three amounts are never derived, because nothing in the invoice determines
+ * them: BT-113 (`prepaid`) and BT-114 (`rounding`) are carried through as
+ * given, and `duePayable` is `grandTotal - prepaid + rounding` exactly as
+ * `validateEn16931` asserts it (BR-CO-16); BT-111
+ * (`taxTotalInTaxCurrency`) needs an exchange rate, and is carried too.
  */
 export function computeTotals(source: DraftInvoice, options: TotalsOptions = {}): TotalsResult {
   const empty = noLines(source);
@@ -272,7 +273,14 @@ function deriveTotals(
   // BR-CO-16 — BT-113 is the caller's to state; it cannot be derived, and
   // defaults to absent rather than to zero.
   const prepaid = draft.totals?.prepaid;
-  const duePayable = round(sub(grandTotal, prepaid === undefined ? dec(0) : dec(prepaid)), 2);
+  // BT-114 is the caller's too: rounding to a cash unit is a decision, not
+  // arithmetic. BT-111 needs an exchange rate this library does not have.
+  const rounding = draft.totals?.rounding;
+  const taxTotalInTaxCurrency = draft.totals?.taxTotalInTaxCurrency;
+  const duePayable = round(
+    add(sub(grandTotal, prepaid === undefined ? dec(0) : dec(prepaid)), rounding === undefined ? dec(0) : dec(rounding)),
+    2,
+  );
 
   return {
     lineTotal: toFixed(lineTotal, 2),
@@ -282,6 +290,8 @@ function deriveTotals(
     ...((draft.charges ?? []).length > 0 ? { chargeTotal: toFixed(chargeTotal, 2) } : {}),
     taxBasisTotal: toFixed(taxBasisTotal, 2),
     taxTotal: toFixed(taxTotal, 2),
+    ...(taxTotalInTaxCurrency !== undefined ? { taxTotalInTaxCurrency } : {}),
+    ...(rounding !== undefined ? { rounding } : {}),
     grandTotal: toFixed(grandTotal, 2),
     ...(prepaid !== undefined ? { prepaid } : {}),
     duePayable: toFixed(duePayable, 2),

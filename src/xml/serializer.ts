@@ -10,6 +10,7 @@ import type {
   PaymentMean,
   PrecedingInvoice,
   Note,
+  BillingPeriod,
 } from '../types/invoice.js';
 import type { ParsedInvoice } from '../types/invoice.js';
 import type { Profile } from '../types/profiles.js';
@@ -106,15 +107,41 @@ function buildSupplyChainTradeTransaction(invoice: ParsedInvoice, currency: stri
     `<rsm:SupplyChainTradeTransaction>` +
     lineItems +
     buildApplicableHeaderTradeAgreement(invoice, profile) +
-    // HeaderTradeDeliveryType is an *empty* complexType in MINIMUM: the element
-    // is still required, with nothing inside it. Nothing this library models
-    // goes in it at any profile yet — BG-13 (ship-to) and BT-72 (delivery date)
-    // are header fields FacturXInvoice does not carry. When they arrive, their
-    // floor is BASIC WL.
-    `<ram:ApplicableHeaderTradeDelivery/>` +
+    buildApplicableHeaderTradeDelivery(invoice, profile) +
     buildApplicableHeaderTradeSettlement(invoice, currency, profile) +
     `</rsm:SupplyChainTradeTransaction>`
   );
+}
+
+// HeaderTradeDeliveryType is an *empty* complexType in MINIMUM: the element is
+// still required, with nothing inside it. BG-13 (ship-to) and BT-72 (the
+// delivery date) start at BASIC WL, in that sequence order.
+function buildApplicableHeaderTradeDelivery(invoice: ParsedInvoice, profile: Profile): string {
+  if (!atLeast(profile, 'BASIC WL')) return `<ram:ApplicableHeaderTradeDelivery/>`;
+
+  // Only what BG-13 carries — BT-70 name, BT-71 location identifier, BG-15
+  // address. A caller's tax registration or legal identifier on this party
+  // has no business term to land in, and would be rejected.
+  const shipTo = invoice.shipTo
+    ? buildTradeParty(
+        {
+          name: invoice.shipTo.name,
+          ...(invoice.shipTo.globalId !== undefined ? { globalId: invoice.shipTo.globalId } : {}),
+          ...(invoice.shipTo.globalScheme !== undefined ? { globalScheme: invoice.shipTo.globalScheme } : {}),
+          ...(invoice.shipTo.address !== undefined ? { address: invoice.shipTo.address } : {}),
+        },
+        'ram:ShipToTradeParty',
+        profile,
+      )
+    : '';
+  const delivery =
+    invoice.deliveryDate !== undefined
+      ? `<ram:ActualDeliverySupplyChainEvent>${elDate102('ram:OccurrenceDateTime', 'udt:DateTimeString', invoice.deliveryDate)}</ram:ActualDeliverySupplyChainEvent>`
+      : '';
+
+  return shipTo + delivery === ''
+    ? `<ram:ApplicableHeaderTradeDelivery/>`
+    : `<ram:ApplicableHeaderTradeDelivery>${shipTo}${delivery}</ram:ApplicableHeaderTradeDelivery>`;
 }
 
 // ---- Line items ----
@@ -175,6 +202,9 @@ function buildLineItem(line: LineItem<string>, profile: Profile): string {
     el('ram:CategoryCode', line.vatCategory) +
     el('ram:RateApplicablePercent', formatAmount(line.vatRate)) +
     `</ram:ApplicableTradeTax>` +
+    // LineTradeSettlementType sequence: ApplicableTradeTax, BillingSpecifiedPeriod,
+    // SpecifiedTradeAllowanceCharge. BG-26 starts at BASIC.
+    (line.billingPeriod ? buildBillingPeriod(line.billingPeriod) : '') +
     settlementAllowancesCharges +
     `<ram:SpecifiedTradeSettlementLineMonetarySummation>` +
     elAmount('ram:LineTotalAmount', line.lineTotal) +
@@ -282,6 +312,7 @@ function buildTradeParty(party: TradeParty, tag: string, profile: Profile, defau
       (wl && address.lineThree ? el('ram:LineThree', address.lineThree) : '') +
       (wl && address.city ? el('ram:CityName', address.city) : '') +
       el('ram:CountryID', address.country) +
+      (wl && address.countrySubdivision ? el('ram:CountrySubDivisionName', address.countrySubdivision) : '') +
       `</ram:PostalTradeAddress>`
     : '';
 
@@ -329,12 +360,7 @@ function buildApplicableHeaderTradeSettlement(invoice: ParsedInvoice, currency: 
   const taxes = invoice.taxBreakdown
     .map((tb) => buildTradeTax(tb, invoice.taxDueDateTypeCode))
     .join('');
-  const billingPeriod = invoice.billingPeriod
-    ? `<ram:BillingSpecifiedPeriod>` +
-      elDate102('ram:StartDateTime', 'udt:DateTimeString', invoice.billingPeriod.startDate) +
-      elDate102('ram:EndDateTime', 'udt:DateTimeString', invoice.billingPeriod.endDate) +
-      `</ram:BillingSpecifiedPeriod>`
-    : '';
+  const billingPeriod = invoice.billingPeriod ? buildBillingPeriod(invoice.billingPeriod) : '';
   const precedingInvoices = (invoice.precedingInvoices ?? []).map(buildPrecedingInvoice).join('');
 
   // Document-level allowances/charges (BG-20/BG-21) — the groups BT-107 and
@@ -346,8 +372,13 @@ function buildApplicableHeaderTradeSettlement(invoice: ParsedInvoice, currency: 
 
   const paymentTerms = buildPaymentTerms(invoice);
 
+  // HeaderTradeSettlementType sequence: TaxCurrencyCode precedes
+  // InvoiceCurrencyCode, whatever the BT numbering suggests.
+  const taxCurrency = invoice.taxCurrency ? el('ram:TaxCurrencyCode', invoice.taxCurrency) : '';
+
   return (
     `<ram:ApplicableHeaderTradeSettlement>` +
+    taxCurrency +
     el('ram:InvoiceCurrencyCode', currency) +
     paymentMeans +
     taxes +
@@ -357,9 +388,18 @@ function buildApplicableHeaderTradeSettlement(invoice: ParsedInvoice, currency: 
     // Order is schema-significant and no XSD check runs here — do not reorder.
     allowancesCharges +
     paymentTerms +
-    buildMonetarySummation(invoice.totals, currency, profile) +
+    buildMonetarySummation(invoice.totals, currency, profile, invoice.taxCurrency) +
     precedingInvoices +
     `</ram:ApplicableHeaderTradeSettlement>`
+  );
+}
+
+function buildBillingPeriod(period: BillingPeriod): string {
+  return (
+    `<ram:BillingSpecifiedPeriod>` +
+    elDate102('ram:StartDateTime', 'udt:DateTimeString', period.startDate) +
+    elDate102('ram:EndDateTime', 'udt:DateTimeString', period.endDate) +
+    `</ram:BillingSpecifiedPeriod>`
   );
 }
 
@@ -384,10 +424,9 @@ function buildPaymentTerms(invoice: ParsedInvoice): string {
 }
 
 // Three of this element's children start at EN 16931: BG-18 (the card), BT-85
-// (AccountName) and BT-86 (the BIC). BASIC and BASIC WL carry the account
-// without the institution. BT-82 (Information) and BT-84's non-IBAN form
-// (ram:ProprietaryID) also start at EN 16931 and BASIC respectively, but
-// PaymentMean models neither yet.
+// (AccountName) and BT-86 (the BIC), as does BT-82 (Information). BASIC and
+// BASIC WL carry the account without the institution, either as an IBAN or,
+// for a non-IBAN account, as ram:ProprietaryID.
 function buildPaymentMeans(pm: PaymentMean, profile: Profile): string {
   const en = atLeast(profile, 'EN 16931');
 
@@ -403,12 +442,15 @@ function buildPaymentMeans(pm: PaymentMean, profile: Profile): string {
     ? `<ram:PayerPartyDebtorFinancialAccount>${el('ram:IBANID', pm.payerIban)}</ram:PayerPartyDebtorFinancialAccount>`
     : '';
 
-  const payeeAccount = pm.iban
-    ? `<ram:PayeePartyCreditorFinancialAccount>` +
-      el('ram:IBANID', pm.iban) +
-      (pm.accountName && en ? el('ram:AccountName', pm.accountName) : '') +
-      `</ram:PayeePartyCreditorFinancialAccount>`
-    : '';
+  // CreditorFinancialAccountType sequence: IBANID, AccountName, ProprietaryID.
+  const payeeAccount =
+    pm.iban || pm.accountId
+      ? `<ram:PayeePartyCreditorFinancialAccount>` +
+        (pm.iban ? el('ram:IBANID', pm.iban) : '') +
+        (pm.accountName && en ? el('ram:AccountName', pm.accountName) : '') +
+        (pm.accountId ? el('ram:ProprietaryID', pm.accountId) : '') +
+        `</ram:PayeePartyCreditorFinancialAccount>`
+      : '';
 
   const payeeInstitution =
     pm.bic && en
@@ -418,6 +460,7 @@ function buildPaymentMeans(pm: PaymentMean, profile: Profile): string {
   return (
     `<ram:SpecifiedTradeSettlementPaymentMeans>` +
     el('ram:TypeCode', pm.typeCode) +
+    (pm.information && en ? el('ram:Information', pm.information) : '') +
     card +
     payerAccount +
     payeeAccount +
@@ -448,10 +491,25 @@ function buildTradeTax(tb: TaxBreakdown<string>, invoiceTaxDueDateTypeCode: stri
 }
 
 // MINIMUM keeps four of the ten: the taxable basis, the tax, the grand total
-// and what is due. BT-114 (ram:RoundingAmount) would start at EN 16931, but
-// MonetaryTotals has no field for it yet.
-function buildMonetarySummation(totals: ParsedInvoice['totals'], currency: string, profile: Profile): string {
+// and what is due. BT-114 (ram:RoundingAmount) starts at EN 16931; below it,
+// generate refuses a non-zero rounding rather than drop it
+// (validateProfileStructure).
+function buildMonetarySummation(
+  totals: ParsedInvoice['totals'],
+  currency: string,
+  profile: Profile,
+  taxCurrency?: string,
+): string {
   const wl = atLeast(profile, 'BASIC WL');
+  // BT-111: the second TaxTotalAmount occurrence, told apart from BT-110 by
+  // its currencyID alone. Only written with the currency it is expressed in.
+  const taxTotalInTaxCurrency =
+    wl && taxCurrency && totals.taxTotalInTaxCurrency !== undefined
+      ? elAmountWithCurrency('ram:TaxTotalAmount', totals.taxTotalInTaxCurrency, taxCurrency)
+      : '';
+  // BT-114 starts at EN 16931; BASIC's summation has no RoundingAmount.
+  const rounding =
+    atLeast(profile, 'EN 16931') && totals.rounding !== undefined ? elAmount('ram:RoundingAmount', totals.rounding) : '';
   const lineTotal =
     wl && totals.lineTotal !== undefined ? elAmount('ram:LineTotalAmount', totals.lineTotal) : '';
   const chargeTotal =
@@ -469,9 +527,10 @@ function buildMonetarySummation(totals: ParsedInvoice['totals'], currency: strin
     // EN 16931's Schematron permits currencyID on exactly this one amount
     // (to disambiguate a VAT total expressed in a second, accounting
     // currency — BT-111); everywhere else it's a violation ("attribute not
-    // used in the given context"). This library has no separate tax
-    // currency, so the invoice's own currency always satisfies that rule.
+    // used in the given context").
     elAmountWithCurrency('ram:TaxTotalAmount', totals.taxTotal, currency) +
+    taxTotalInTaxCurrency +
+    rounding +
     elAmount('ram:GrandTotalAmount', totals.grandTotal) +
     prepaid +
     elAmount('ram:DuePayableAmount', totals.duePayable) +
