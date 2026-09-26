@@ -4,12 +4,12 @@ TypeScript-native [Factur-X](https://fnfe-mpe.org/factur-x/) generator and parse
 
 Strictly typed, no `any`. Two runtime dependencies: [`pdf-lib`](https://github.com/Hopding/pdf-lib) and [`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser).
 
-> **Status: pre-release.** 0.3.0 is prepared but not yet on npm, where 0.2.0 is the latest; it changes the API — see [CHANGELOG](CHANGELOG.md). All five profiles are built, each validated against its own XSD and its own Schematron rule set. See [Limitations](#limitations) before using this for real invoicing.
+> **Status: 0.3.0, pre-release.** It changes the API of 0.2.0 — see [CHANGELOG](CHANGELOG.md). All five profiles are built, each validated against its own XSD and its own Schematron rule set. See [Limitations](#limitations) before using this for real invoicing.
 
 ## Install
 
 ```bash
-npm install github:nseaSeb/factur-x-ts
+npm install factur-x-ts
 ```
 
 Requires Node 20.11 or newer. The package is ESM-only.
