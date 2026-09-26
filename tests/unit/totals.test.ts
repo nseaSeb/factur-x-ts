@@ -154,7 +154,7 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.invoice.totals.grandTotal).toBe('120.00');
-    expect(result.invoice.totals.prepaid).toBe('50');
+    expect(result.invoice.totals.prepaid).toBe('50.00');
     expect(result.invoice.totals.duePayable).toBe('70.00');
   });
 
@@ -215,7 +215,7 @@ describe('computeTotals', () => {
         code: 'TOTALS_MISMATCH',
         field: 'totals.grandTotal',
         message: 'totals.grandTotal: stated 999.00, derived 120.00',
-        given: '999',
+        given: '999.00',
         computed: '120.00',
       },
     ]);
@@ -242,7 +242,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors).toMatchObject([{ field: 'totals.allowanceTotal', given: '20', computed: '0' }]);
+    expect(result.errors).toMatchObject([{ field: 'totals.allowanceTotal', given: '20.00', computed: '0' }]);
   });
 
   it('takes the computed figures with overwrite', () => {
@@ -337,7 +337,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors).toMatchObject([{ field: 'totals.grandTotal', given: '56.2', computed: '56.18' }]);
+    expect(result.errors).toMatchObject([{ field: 'totals.grandTotal', given: '56.20', computed: '56.18' }]);
   });
 
   it('still reports a stated BT-117 that is off by more than a cent', () => {

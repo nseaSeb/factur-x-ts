@@ -240,3 +240,37 @@ describe('documents the schemas allow and the deserializer used to refuse', () =
     await expect(generate({ invoice: parsed, profile: 'EN 16931' })).resolves.toBeInstanceOf(Uint8Array);
   });
 });
+
+// Found by /code-review: sums were taken over raw sub-cent amounts, which the
+// wire then carried rounded one by one.
+describe('money is rounded to the cent before anything sums it', () => {
+  it('derives BT-107 as the sum of the amounts the document will carry', () => {
+    const { totals: _t, taxBreakdown: _tb, allowances: _a, ...header } = sampleInvoice();
+    const result = computeTotals({
+      ...header,
+      lines: [{ id: '1', name: 'Article', quantity: 1, unit: 'C62', netPrice: 200, vatCategory: 'S', vatRate: 20 }],
+      allowances: [0, 1].map(() => ({ amount: '0.005', reason: 'Remise', vatCategory: 'S' as const, vatRate: 20 })),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.invoice.allowances?.map((a) => a.amount)).toEqual(['0.01', '0.01']);
+    expect(result.invoice.totals.allowanceTotal).toBe('0.02');
+    expect(result.invoice.totals.taxBasisTotal).toBe('199.98');
+
+    const xml = serialize(result.invoice, 'EN 16931');
+    const written = [...xml.matchAll(/<ram:SpecifiedTradeAllowanceCharge>.*?<ram:ActualAmount>([^<]*)</g)].map((m) => Number(m[1]));
+    const total = Number(/<ram:AllowanceTotalAmount>([^<]*)</.exec(xml)?.[1]);
+    expect(written.reduce((a, b) => a + b, 0)).toBeCloseTo(total, 10);
+  });
+
+  it('validates stated sub-cent amounts as they will be written', () => {
+    const base = sampleInvoice();
+    const invoice = {
+      ...base,
+      allowances: [0, 1].map(() => ({ amount: '0.005', reason: 'Remise', vatCategory: 'S' as const, vatRate: 20 })),
+      totals: { ...base.totals, allowanceTotal: '0.01' },
+    };
+    expect(validateEn16931(invoice).errors.map((e) => e.field)).toContain('totals.allowanceTotal');
+  });
+});

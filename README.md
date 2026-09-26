@@ -159,6 +159,8 @@ Why numbers are still accepted on the way in, with one condition: a number must 
 
 Rounding is half away from zero, the commercial rule: `'1.005'` becomes `1.01`, where `(1.005).toFixed(2)` gives `1.00`.
 
+A money amount with more than two decimals is rounded to the cent on entry, before anything sums it, so every total checked or derived is the sum of the figures the document will carry. Two allowances of `'0.005'` become `'0.01'` each and a BT-107 of `'0.02'`. Quantities, unit prices (four decimals on the wire) and rates keep their own scale.
+
 `normalizeInvoice` runs the same check on its own and returns every refused field with its path, so a form or an import can report problems before building anything. `serialize`, `validateEn16931`, `computeTotals` and `generate` all start with it.
 
 ```ts
@@ -479,7 +481,6 @@ Every profile ships a bundled XSD and rule set, checkable with [`validateXsd`](#
 
 Left as-is, either unverifiable or deliberate — not correctness bugs:
 
-- A caller-supplied amount with more than two decimals is rounded to two when serialized (half away from zero), not refused. `validateEn16931` compares at the cent, so such an invoice is accepted as long as its sums hold once rounded.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
 ## XSD validation

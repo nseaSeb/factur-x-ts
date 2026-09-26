@@ -8,7 +8,7 @@
 // `Infinity`, a malformed string or a drifted float is refused the same way
 // whichever entry point it reaches.
 
-import { describeRefusal, parseDecimal, toText, type DecimalInput, type DecimalRefusal } from './decimal.js';
+import { describeRefusal, parseDecimal, toFixed, toText, type DecimalInput, type DecimalRefusal } from './decimal.js';
 import type {
   AllowanceCharge,
   FacturXInvoice,
@@ -35,9 +35,10 @@ export type NormalizeResult =
  *
  * Numbers are accepted when they are finite and show no float drift (at most
  * six decimals — `0.1 + 0.2` is refused); strings when they are `xsd:decimal`.
- * The canonical form keeps the value's own scale: `100`, `"100.00"` and
- * `"+100.00"` become `"100"`, `"100.00"` and `"100.00"`. Returns every problem,
- * not the first.
+ * Money amounts come back at two decimals, rounded half away from zero, as
+ * the document will carry them (`100` and `"100.005"` become `"100.00"` and
+ * `"100.01"`); quantities, unit prices and rates keep their own scale
+ * (`"5.5"` stays `"5.5"`). Returns every problem, not the first.
  */
 export function normalizeInvoice(invoice: FacturXInvoice): NormalizeResult {
   const { errors, value } = normalizeTree(invoice);
@@ -66,11 +67,41 @@ function normalizeTree(tree: FacturXInvoice | DraftInvoice): { errors: DecimalEr
   const errors: DecimalError[] = [];
   const value = convertDecimals(tree, (input, field) => {
     const parsed = parseDecimal(input);
-    if (parsed.ok) return toText(parsed.value);
+    if (parsed.ok) return isMoney(field) ? toFixed(parsed.value, 2) : toText(parsed.value);
     errors.push({ field, reason: parsed.reason, message: `${field}: ${describeRefusal(input, parsed.reason)}` });
     return '0';
   });
   return { errors, value };
+}
+
+/**
+ * The money fields, which the wire carries at two decimals.
+ *
+ * They are rounded to the cent here, on entry, rather than only when written:
+ * every sum the library checks or derives must be the sum of the figures the
+ * document will actually carry. Rounded only on the wire, two allowances of
+ * 0.005 were summed to a BT-107 of 0.01 but written as 0.01 each — a document
+ * the Schematron rejects (BR-CO-11). Quantities, unit prices, rates and
+ * percentages keep their own scale.
+ */
+const MONEY_FIELDS = new Set([
+  'amount',
+  'basisAmount',
+  'calculatedAmount',
+  'lineTotal',
+  'allowanceTotal',
+  'chargeTotal',
+  'taxBasisTotal',
+  'taxTotal',
+  'taxTotalInTaxCurrency',
+  'rounding',
+  'grandTotal',
+  'prepaid',
+  'duePayable',
+]);
+
+function isMoney(field: string): boolean {
+  return MONEY_FIELDS.has(field.slice(field.lastIndexOf('.') + 1));
 }
 
 type Convert = (value: DecimalInput, field: string) => string;
