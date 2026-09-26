@@ -86,7 +86,7 @@ import { readFile } from 'node:fs/promises';
 const { invoice, metadata, rawXml } = await parse(await readFile('invoice.pdf'));
 
 console.log(invoice.number);          // 'INV-2026-001'
-console.log(invoice.totals.duePayable); // 240
+console.log(invoice.totals.duePayable); // '240.00' — a decimal string, see Amounts below
 console.log(metadata.conformanceLevel); // 'EN 16931'
 ```
 
@@ -141,6 +141,33 @@ const pdfBytes = await generate({ xml: bytes, visualPdf: await readFile('rendere
 
 `deserialize` is strict to this library's model, and making it public makes that visible: `currency` is a closed `'EUR' | 'USD' | 'GBP'` and `typeCode` a closed `'380' | '381' | '386' | '500'`, so a CHF invoice or a `'503'` down-payment document throws `FacturXDeserializeError`. `extract` plus `generate({ xml })` is the path for a document `deserialize` cannot model — it never needs to.
 
+## Amounts are decimals, not floats
+
+Every amount, quantity and rate is a `DecimalInput`: a `number` or a decimal string. What the library hands back — from `parse`, `deserialize` and `computeTotals` — is always a canonical decimal string (`ParsedInvoice`), and all arithmetic is exact decimal, never float.
+
+```ts
+generate({ invoice: { ...invoice, totals: { ...totals, grandTotal: '1234.50' } }, profile }); // a string
+generate({ invoice: { ...invoice, totals: { ...totals, grandTotal: 1234.5 } }, profile });    // or a number
+
+const { invoice: parsed } = await parse(pdf);
+parsed.totals.grandTotal; // '1234.50' — every digit the document carries
+```
+
+Why strings on the way out: a received invoice is third-party data, and a float cannot hold every amount it may carry (`12345678901234567890.12`). Converting it would change a legal figure without a word.
+
+Why numbers are still accepted on the way in, with one condition: a number must be finite and carry at most six decimals. Float arithmetic leaves a mark — `0.1 + 0.2` is `0.30000000000000004`, `4.35 * 100` is `434.99999999999994` — and such a value is refused with `INVALID_DECIMAL` instead of being rounded into a plausible figure. Round it yourself, or pass the amount as a string. A string is not subject to that limit: it was written, not computed.
+
+Rounding is half away from zero, the commercial rule: `'1.005'` becomes `1.01`, where `(1.005).toFixed(2)` gives `1.00`.
+
+`normalizeInvoice` runs the same check on its own and returns every refused field with its path, so a form or an import can report problems before building anything. `serialize`, `validateEn16931`, `computeTotals` and `generate` all start with it.
+
+```ts
+const checked = normalizeInvoice(draft);
+if (!checked.ok) {
+  for (const e of checked.errors) console.error(e.message); // 'lines[0].netPrice: 0.30000000000000004 has more than 6 decimals, …'
+}
+```
+
 ## Let the library do the arithmetic
 
 `computeTotals` derives the line amounts, the VAT breakdown and the document
@@ -164,9 +191,9 @@ const result = computeTotals({
 });
 
 if (result.ok) {
-  result.invoice.totals.lineTotal;  // 99.99
-  result.invoice.totals.taxTotal;   // 5.5   — BR-CO-17 rounds 5.49945 to the cent
-  result.invoice.totals.grandTotal; // 105.49
+  result.invoice.totals.lineTotal;  // '99.99'
+  result.invoice.totals.taxTotal;   // '5.50'  — BR-CO-17 rounds 5.49945 to the cent
+  result.invoice.totals.grandTotal; // '105.49'
 }
 ```
 
@@ -199,14 +226,15 @@ answered with a number that means nothing:
 - `DUPLICATE_TAX_BREAKDOWN` — two entries sharing a category and rate. One would
   overwrite the other and take its exemption reason with it, surfacing much
   later as a BR-E-10 rejection of a document whose caller did supply one.
-- `NOT_A_FINITE_AMOUNT` — a `NaN` or `Infinity` reaching an amount. It would
-  propagate through every sum and be serialized as
-  `<ram:GrandTotalAmount>NaN</ram:GrandTotalAmount>`.
+- `INVALID_DECIMAL` — an amount, quantity or rate that is not a decimal: `NaN`,
+  `Infinity`, a malformed string, or a number showing float drift. Every one is
+  reported, with its path, before anything is computed.
 
 Four comparisons are deliberately looser than the rest. A supplied BT-117
 (`calculatedAmount`) is accepted within a cent of the derived one — it is the
-one figure two correct implementations can legitimately disagree on, see the
-rounding note under [Limitations](#limitations) — and BT-110, BT-112 and BT-115
+one figure two correct implementations can legitimately disagree on, since
+rounding a half-cent tie is a convention (half away from zero here, a float's
+representation elsewhere) — and BT-110, BT-112 and BT-115
 (`taxTotal`, `grandTotal`, `duePayable`) within a cent per VAT breakdown group,
 since they are built on it and comparing them exactly would cancel the slack on
 the figures they sum. The other four totals are sums of amounts you supplied
@@ -428,7 +456,7 @@ Every profile ships a bundled XSD and rule set, checkable with [`validateXsd`](#
 
 Left as-is, either unverifiable or deliberate — not correctness bugs:
 
-- Amounts are `number`, not a decimal type, and are rounded with `toFixed(2)` — the same way they are serialized. A half-cent tie therefore follows the float representation rather than decimal half-up (`(1.005).toFixed(2)` is `1.00`), so a figure may differ by a cent from a decimal-based implementation. BR-CO-17's tolerance is a full currency unit and accepts either.
+- A caller-supplied amount with more than two decimals is rounded to two when serialized (half away from zero), not refused. `validateEn16931` compares at the cent, so such an invoice is accepted as long as its sums hold once rounded.
 - BT-114 (the rounding amount) has no field in `MonetaryTotals`, so it is neither serialized nor usable in `computeTotals`. BR-CO-16 is therefore `duePayable = grandTotal - prepaid`, with no rounding term.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 

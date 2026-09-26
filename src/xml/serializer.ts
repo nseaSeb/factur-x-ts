@@ -11,7 +11,10 @@ import type {
   PrecedingInvoice,
   Note,
 } from '../types/invoice.js';
+import type { ParsedInvoice } from '../types/invoice.js';
 import type { Profile } from '../types/profiles.js';
+import { dec, toFixed } from '../decimal.js';
+import { normalizeInvoice } from '../normalize.js';
 import { atLeast, GUIDELINE_URN } from '../types/profiles.js';
 
 export class FacturXSerializeError extends Error {
@@ -21,12 +24,18 @@ export class FacturXSerializeError extends Error {
   }
 }
 
-export function serialize(invoice: FacturXInvoice, profile: Profile): string {
+export function serialize(source: FacturXInvoice, profile: Profile): string {
   // The type already says so; this is for JavaScript callers and `as` casts,
   // which would otherwise get a TypeError from deep inside the builders.
   if (!Object.hasOwn(GUIDELINE_URN, profile)) {
     throw new FacturXSerializeError(`Unknown profile: ${profile}`);
   }
+  // Never write NaN, Infinity or a drifted float into the document.
+  const normalized = normalizeInvoice(source);
+  if (!normalized.ok) {
+    throw new FacturXSerializeError(`Invalid decimal values: ${normalized.errors.map((e) => e.message).join('; ')}`);
+  }
+  const invoice = normalized.invoice;
   const currency = invoice.currency;
 
   const body =
@@ -46,7 +55,7 @@ export function serialize(invoice: FacturXInvoice, profile: Profile): string {
 
 // ---- ExchangedDocumentContext ----
 
-function buildExchangedDocumentContext(invoice: FacturXInvoice, profile: Profile): string {
+function buildExchangedDocumentContext(invoice: ParsedInvoice, profile: Profile): string {
   const businessProcess = invoice.businessProcess
     ? `<ram:BusinessProcessSpecifiedDocumentContextParameter>` +
       el('ram:ID', invoice.businessProcess) +
@@ -65,7 +74,7 @@ function buildExchangedDocumentContext(invoice: FacturXInvoice, profile: Profile
 
 // BG-1 starts at BASIC WL: ExchangedDocumentType has no ram:IncludedNote in
 // MINIMUM's schema, so a note there is an XSD error, not a business-rule one.
-function buildExchangedDocument(invoice: FacturXInvoice, profile: Profile): string {
+function buildExchangedDocument(invoice: ParsedInvoice, profile: Profile): string {
   const notes = atLeast(profile, 'BASIC WL') ? (invoice.notes ?? []).map(buildNote).join('') : '';
 
   return (
@@ -85,7 +94,7 @@ function buildNote(note: Note): string {
 
 // ---- SupplyChainTradeTransaction ----
 
-function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: string, profile: Profile): string {
+function buildSupplyChainTradeTransaction(invoice: ParsedInvoice, currency: string, profile: Profile): string {
   // MINIMUM and BASIC WL have no ram:IncludedSupplyChainTradeLineItem at all —
   // "WL" is *without lines*. What the lines carried is simply not emitted; the
   // header totals still are, which is the whole point of those two profiles.
@@ -110,7 +119,7 @@ function buildSupplyChainTradeTransaction(invoice: FacturXInvoice, currency: str
 
 // ---- Line items ----
 
-function buildLineItem(line: LineItem, profile: Profile): string {
+function buildLineItem(line: LineItem<string>, profile: Profile): string {
   const priceDiscount =
     line.grossPrice !== undefined && line.priceDiscount !== undefined
       ? `<ram:AppliedTradeAllowanceCharge>` +
@@ -184,7 +193,7 @@ function buildLineItem(line: LineItem, profile: Profile): string {
 // with one. Only EXTENDED gets the full list — every other profile gets at
 // most the first note-with-content's Content, matching the Elixir sibling
 // (Facturx.CII.line_notes/2).
-function buildLineNotes(line: LineItem, profile: Profile): string {
+function buildLineNotes(line: LineItem<string>, profile: Profile): string {
   const withContent = (line.notes ?? []).filter((n) => n.content.trim() !== '');
   if (atLeast(profile, 'EXTENDED')) return withContent.map(buildNote).join('');
 
@@ -192,7 +201,7 @@ function buildLineNotes(line: LineItem, profile: Profile): string {
   return first ? `<ram:IncludedNote>${el('ram:Content', first.content)}</ram:IncludedNote>` : '';
 }
 
-function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean): string {
+function buildTradeAllowanceCharge(ac: AllowanceCharge<string>, isCharge: boolean): string {
   const calculationPercent = ac.percent !== undefined ? el('ram:CalculationPercent', formatAmount(ac.percent)) : '';
   const basisAmount = ac.basisAmount !== undefined ? elAmount('ram:BasisAmount', ac.basisAmount) : '';
   const reasonCode = ac.reasonCode ? el('ram:ReasonCode', ac.reasonCode) : '';
@@ -217,7 +226,7 @@ function buildTradeAllowanceCharge(ac: AllowanceCharge, isCharge: boolean): stri
 
 // ---- ApplicableHeaderTradeAgreement ----
 
-function buildApplicableHeaderTradeAgreement(invoice: FacturXInvoice, profile: Profile): string {
+function buildApplicableHeaderTradeAgreement(invoice: ParsedInvoice, profile: Profile): string {
   // BG-11 starts at BASIC WL: MINIMUM has no SellerTaxRepresentativeTradeParty.
   const taxRepresentative =
     invoice.taxRepresentative && atLeast(profile, 'BASIC WL')
@@ -301,7 +310,7 @@ function buildTradeParty(party: TradeParty, tag: string, profile: Profile, defau
 
 // ---- ApplicableHeaderTradeSettlement ----
 
-function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency: string, profile: Profile): string {
+function buildApplicableHeaderTradeSettlement(invoice: ParsedInvoice, currency: string, profile: Profile): string {
   // MINIMUM's HeaderTradeSettlementType holds two children and no more:
   // InvoiceCurrencyCode and the summation. Not even ram:ApplicableTradeTax —
   // which is why a MINIMUM document cannot carry BG-23, and is an accounting
@@ -357,7 +366,7 @@ function buildApplicableHeaderTradeSettlement(invoice: FacturXInvoice, currency:
 // BR-CO-25 (EXTENDED Schematron): the amount due for payment positive requires
 // one of BT-9 (due date) or BT-20 (terms text) — validateEn16931 enforces this
 // on the model; here we just emit whichever fields are present.
-function buildPaymentTerms(invoice: FacturXInvoice): string {
+function buildPaymentTerms(invoice: ParsedInvoice): string {
   const description = invoice.paymentTerms ? el('ram:Description', invoice.paymentTerms) : '';
   const dueDate =
     invoice.paymentDueDate !== undefined
@@ -417,7 +426,7 @@ function buildPaymentMeans(pm: PaymentMean, profile: Profile): string {
   );
 }
 
-function buildTradeTax(tb: TaxBreakdown, invoiceTaxDueDateTypeCode: string | undefined): string {
+function buildTradeTax(tb: TaxBreakdown<string>, invoiceTaxDueDateTypeCode: string | undefined): string {
   const exemptionReason = tb.exemptionReason ? el('ram:ExemptionReason', tb.exemptionReason) : '';
   const exemptionReasonCode = tb.exemptionReasonCode ? el('ram:ExemptionReasonCode', tb.exemptionReasonCode) : '';
   // Per-breakdown value overrides the invoice-wide French mandate default (BT-8).
@@ -441,7 +450,7 @@ function buildTradeTax(tb: TaxBreakdown, invoiceTaxDueDateTypeCode: string | und
 // MINIMUM keeps four of the ten: the taxable basis, the tax, the grand total
 // and what is due. BT-114 (ram:RoundingAmount) would start at EN 16931, but
 // MonetaryTotals has no field for it yet.
-function buildMonetarySummation(totals: FacturXInvoice['totals'], currency: string, profile: Profile): string {
+function buildMonetarySummation(totals: ParsedInvoice['totals'], currency: string, profile: Profile): string {
   const wl = atLeast(profile, 'BASIC WL');
   const lineTotal =
     wl && totals.lineTotal !== undefined ? elAmount('ram:LineTotalAmount', totals.lineTotal) : '';
@@ -483,11 +492,11 @@ function el(tag: string, text: string): string {
   return `<${tag}>${xmlEscape(text)}</${tag}>`;
 }
 
-function elAmount(tag: string, value: number): string {
+function elAmount(tag: string, value: string): string {
   return `<${tag}>${formatAmount(value)}</${tag}>`;
 }
 
-function elAmountWithCurrency(tag: string, value: number, currency: string): string {
+function elAmountWithCurrency(tag: string, value: string, currency: string): string {
   return `<${tag} currencyID="${xmlEscape(currency)}">${formatAmount(value)}</${tag}>`;
 }
 
@@ -500,7 +509,7 @@ function elAmountWithCurrency(tag: string, value: number, currency: string): str
 // truncates real precision (a per-liter price needing 3-4 decimals is
 // common) and breaks quantity × netPrice reconciling with lineTotal. 4
 // decimals matches formatQuantity's existing precision below.
-function elUnitPrice(tag: string, value: number): string {
+function elUnitPrice(tag: string, value: string): string {
   return `<${tag}>${formatUnitPrice(value)}</${tag}>`;
 }
 
@@ -512,17 +521,20 @@ function elIndicator(value: boolean): string {
   return `<udt:Indicator>${value ? 'true' : 'false'}</udt:Indicator>`;
 }
 
-function formatAmount(value: number): string {
-  // Normalizes -0 to "0.00" (per IEEE 754, -0 + 0 === +0).
-  return (value + 0).toFixed(2);
+// Values reach here already normalized (see `serialize`), so `dec` cannot
+// throw. Rounding is decimal half away from zero: "1.005" is written "1.01".
+// A caller-supplied amount with more than two decimals is still rounded to
+// the wire's two, as it always was — only the rounding rule is now exact.
+function formatAmount(value: string): string {
+  return toFixed(dec(value), 2);
 }
 
-function formatQuantity(value: number): string {
-  return (value + 0).toFixed(4);
+function formatQuantity(value: string): string {
+  return toFixed(dec(value), 4);
 }
 
-function formatUnitPrice(value: number): string {
-  return (value + 0).toFixed(4);
+function formatUnitPrice(value: string): string {
+  return toFixed(dec(value), 4);
 }
 
 function formatDate102(date: Date): string {

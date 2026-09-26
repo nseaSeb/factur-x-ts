@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { serialize } from '../../src/xml/serializer.js';
 import { deserialize } from '../../src/xml/deserializer.js';
-import { sampleInvoice, expectedRoundTrip } from '../fixtures/invoice.js';
+import { sampleInvoice, expectedRoundTrip, atWireScale } from '../fixtures/invoice.js';
 
 describe('serialize', () => {
   it('emits the EN 16931 guideline ID and root namespaces', () => {
@@ -396,7 +396,7 @@ describe('serialize + deserialize round-trip', () => {
     };
 
     const roundTripped = deserialize(serialize(minimal, 'EN 16931'));
-    expect(roundTripped).toEqual(minimal);
+    expect(roundTripped).toEqual(atWireScale(minimal));
   });
 
   it('round-trips BT-9 (paymentDueDate) and BT-20 (paymentTerms) together', () => {
