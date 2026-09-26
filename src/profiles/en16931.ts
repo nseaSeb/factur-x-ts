@@ -312,13 +312,14 @@ function validateAmounts(invoice: ParsedInvoice, errors: ValidationError[]): voi
   validateAllowanceChargeTotal(invoice.charges, totals.chargeTotal, 'charge', 'BR-CO-12', errors);
 
   const taxBreakdownSum = sum(invoice.taxBreakdown.map((tb) => dec(tb.calculatedAmount)));
-  if (!sameCents(taxBreakdownSum, dec(totals.taxTotal))) {
+  // BT-110 is optional; absent, it states no VAT, and the breakdown must agree.
+  if (!sameCents(taxBreakdownSum, optional(totals.taxTotal))) {
     errors.push(
       field('totals.taxTotal', 'AMOUNT_MISMATCH', `Sum of VAT breakdown amounts (${toFixed(taxBreakdownSum, 2)}) does not match totals.taxTotal (BR-CO-14)`),
     );
   }
 
-  const expectedGrandTotal = add(dec(totals.taxBasisTotal), dec(totals.taxTotal));
+  const expectedGrandTotal = add(dec(totals.taxBasisTotal), optional(totals.taxTotal));
   if (!sameCents(expectedGrandTotal, dec(totals.grandTotal))) {
     errors.push(field('totals.grandTotal', 'AMOUNT_MISMATCH', 'grandTotal must equal taxBasisTotal + taxTotal (BR-CO-15)'));
   }

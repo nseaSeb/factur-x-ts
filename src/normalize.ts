@@ -133,7 +133,7 @@ function convertDecimals(source: FacturXInvoice | DraftInvoice, convert: Convert
       allowanceTotal: opt(totals.allowanceTotal, 'totals.allowanceTotal'),
       chargeTotal: opt(totals.chargeTotal, 'totals.chargeTotal'),
       taxBasisTotal: opt(totals.taxBasisTotal as DecimalInput | undefined, 'totals.taxBasisTotal'),
-      taxTotal: opt(totals.taxTotal as DecimalInput | undefined, 'totals.taxTotal'),
+      taxTotal: opt(totals.taxTotal, 'totals.taxTotal'),
       taxTotalInTaxCurrency: opt(totals.taxTotalInTaxCurrency, 'totals.taxTotalInTaxCurrency'),
       rounding: opt(totals.rounding, 'totals.rounding'),
       grandTotal: opt(totals.grandTotal as DecimalInput | undefined, 'totals.grandTotal'),
