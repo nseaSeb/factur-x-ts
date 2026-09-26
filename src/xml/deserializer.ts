@@ -2,6 +2,7 @@
 // CII XML (UN/CEFACT SCRDM D22B) → FacturXInvoice.
 
 import { XMLParser } from 'fast-xml-parser';
+import { hasDoctype, stripBom } from './hygiene.js';
 import type {
   FacturXInvoice,
   TradeParty,
@@ -254,7 +255,19 @@ export function deserialize(xml: string): FacturXInvoice {
     isArray: (_tagName, jPath) => ARRAY_PATHS.has(jPath),
   });
 
-  const root = parser.parse(xml) as ParsedRoot;
+  const text = stripBom(xml);
+  // Third-party invoices come through here: an entity declaration would be
+  // expanded by fast-xml-parser, so a DOCTYPE is refused before parsing.
+  if (hasDoctype(text)) {
+    throw new FacturXDeserializeError('XML carries a DOCTYPE declaration, which is refused (XXE / entity expansion)');
+  }
+
+  let root: ParsedRoot;
+  try {
+    root = parser.parse(text) as ParsedRoot;
+  } catch (cause) {
+    throw new FacturXDeserializeError(`XML is not well-formed: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
   const cii = root.CrossIndustryInvoice;
   if (!cii) {
     throw new FacturXDeserializeError('Missing root element rsm:CrossIndustryInvoice');
@@ -452,9 +465,9 @@ function parseLineItem(node: ParsedLineItem): LineItem {
   }
 
   const grossPriceNode = node.SpecifiedLineTradeAgreement?.GrossPriceProductTradePrice;
-  const grossPrice = grossPriceNode ? parseOptionalAmount(grossPriceNode.ChargeAmount) : undefined;
+  const grossPrice = grossPriceNode ? parseOptionalAmount(grossPriceNode.ChargeAmount, `line ${id} GrossPriceProductTradePrice ChargeAmount`) : undefined;
   const priceDiscount = grossPriceNode?.AppliedTradeAllowanceCharge
-    ? parseOptionalAmount(grossPriceNode.AppliedTradeAllowanceCharge.ActualAmount)
+    ? parseOptionalAmount(grossPriceNode.AppliedTradeAllowanceCharge.ActualAmount, `line ${id} gross price discount`)
     : undefined;
 
   const settlementAllowancesCharges = node.SpecifiedLineTradeSettlement?.SpecifiedTradeAllowanceCharge ?? [];
@@ -513,7 +526,7 @@ function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge {
     throw new FacturXDeserializeError('Missing ram:CategoryTradeTax in allowance/charge');
   }
 
-  const basisAmount = parseOptionalAmount(node.BasisAmount);
+  const basisAmount = parseOptionalAmount(node.BasisAmount, 'allowance/charge BasisAmount');
   const percent = node.CalculationPercent !== undefined ? requireNumber(node.CalculationPercent, 'allowance/charge CalculationPercent') : undefined;
 
   return {
@@ -560,10 +573,10 @@ function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals {
     throw new FacturXDeserializeError('Incomplete ram:SpecifiedTradeSettlementHeaderMonetarySummation');
   }
 
-  const lineTotal = parseOptionalAmount(node.LineTotalAmount);
-  const allowanceTotal = parseOptionalAmount(node.AllowanceTotalAmount);
-  const chargeTotal = parseOptionalAmount(node.ChargeTotalAmount);
-  const prepaid = parseOptionalAmount(node.TotalPrepaidAmount);
+  const lineTotal = parseOptionalAmount(node.LineTotalAmount, 'LineTotalAmount');
+  const allowanceTotal = parseOptionalAmount(node.AllowanceTotalAmount, 'AllowanceTotalAmount');
+  const chargeTotal = parseOptionalAmount(node.ChargeTotalAmount, 'ChargeTotalAmount');
+  const prepaid = parseOptionalAmount(node.TotalPrepaidAmount, 'TotalPrepaidAmount');
 
   return {
     ...(lineTotal !== undefined ? { lineTotal } : {}),
@@ -633,27 +646,36 @@ function textOf(node: string | TextNode | undefined): string | undefined {
   return node['#text'];
 }
 
-function requireNumber(text: string, field: string): number {
-  const value = Number(text);
-  // A continental "1,5" or any other non-numeric text silently becomes NaN
-  // via Number() — must fail loudly here rather than propagate a NaN into
-  // the model (e.g. a NaN vatRate, invisible until a downstream computation
-  // that reads it also turns to NaN).
-  if (Number.isNaN(value)) throw new FacturXDeserializeError(`Invalid numeric value for ${field}: "${text}"`);
+// xsd:decimal's lexical space, and nothing wider: no exponent ("1e400" is
+// Infinity to Number()), no hex ("0x10" is 16), no "Infinity"/"NaN", no
+// thousands or decimal comma. Number() accepts all of those, and every one of
+// them would enter the model as a plausible-looking figure.
+const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+// No real amount, quantity or rate needs more; a longer string is refused
+// before anything computes with it.
+const MAX_DECIMAL_LENGTH = 32;
+
+function requireNumber(text: string | undefined, field: string): number {
+  if (text === undefined) throw new FacturXDeserializeError(`Missing numeric value: ${field}`);
+  const value = decimalValue(text);
+  if (value === undefined) throw new FacturXDeserializeError(`Invalid numeric value for ${field}: "${text}"`);
   return value;
 }
 
 function requireAmount(node: AmountNode, field: string): number {
-  const value = parseOptionalAmount(node);
-  if (value === undefined) throw new FacturXDeserializeError(`Missing or invalid amount: ${field}`);
-  return value;
+  return requireNumber(textOf(node), field);
 }
 
-function parseOptionalAmount(node: AmountNode): number | undefined {
+// Absent is undefined; present but not a decimal is an error, never a silent
+// undefined — an unreadable prepaid amount is not the same as no prepayment.
+function parseOptionalAmount(node: AmountNode, field: string): number | undefined {
   const text = textOf(node);
-  if (text === undefined) return undefined;
-  const value = Number(text);
-  return Number.isNaN(value) ? undefined : value;
+  return text === undefined ? undefined : requireNumber(text, field);
+}
+
+function decimalValue(text: string): number | undefined {
+  if (text.length > MAX_DECIMAL_LENGTH || !DECIMAL.test(text)) return undefined;
+  return Number(text);
 }
 
 function requireDate(node: ParsedDateTime | undefined, field: string): Date {
@@ -662,17 +684,16 @@ function requireDate(node: ParsedDateTime | undefined, field: string): Date {
   return parseDate102(text);
 }
 
+// Format 102 is exactly eight digits. Checked by round-tripping through the
+// Date, because Date.UTC silently rolls "20260230" over to March 2nd.
 function parseDate102(text: string): Date {
-  const year = Number(text.slice(0, 4));
-  const month = Number(text.slice(4, 6));
-  const day = Number(text.slice(6, 8));
-  // Same NaN class as requireNumber guards elsewhere: malformed date text
-  // (too short, non-digit) must fail loudly rather than silently produce an
-  // Invalid Date that only surfaces much later, on first use.
-  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) {
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+  const [year, month, day] = match ? [Number(match[1]), Number(match[2]), Number(match[3])] : [NaN, NaN, NaN];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
     throw new FacturXDeserializeError(`Invalid date (expected YYYYMMDD): "${text}"`);
   }
-  return new Date(Date.UTC(year, month - 1, day));
+  return date;
 }
 
 function asCurrencyCode(value: string): CurrencyCode {

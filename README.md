@@ -4,7 +4,7 @@ TypeScript-native [Factur-X](https://fnfe-mpe.org/factur-x/) generator and parse
 
 Strictly typed, no `any`. Two runtime dependencies: [`pdf-lib`](https://github.com/Hopding/pdf-lib) and [`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser).
 
-> **Status: 0.2.0, pre-release.** Not published to npm yet. All five profiles are built, each validated against its own XSD and its own Schematron rule set. See [Limitations](#limitations) before using this for real invoicing.
+> **Status: pre-release.** 0.2.0 is on npm; `main` is ahead of it. All five profiles are built, each validated against its own XSD and its own Schematron rule set. See [Limitations](#limitations) before using this for real invoicing.
 
 ## Install
 
@@ -91,6 +91,26 @@ console.log(metadata.conformanceLevel); // 'EN 16931'
 ```
 
 `rawXml` is the undecoded attachment bytes, for callers that want to run their own Schematron or archive the original.
+
+## Which inputs are refused
+
+Every PDF and XML this library reads is treated as untrusted — a received invoice, a visual layout from another tool. What it cannot read or would misrepresent is refused with a typed error carrying a `code`, never passed through:
+
+| Input | `parse` / `extract` | `generate` (`visualPdf`) |
+|---|---|---|
+| Not a PDF, or a stream that cannot be decoded | `FacturXParseError`, `MALFORMED_PDF` | `FacturXGenerateError`, `MALFORMED_PDF` |
+| Encrypted (`/Encrypt` in the trailer) | `ENCRYPTED_PDF` — unreadable, not absent | `ENCRYPTED_PDF` |
+| A PDF with no Factur-X attachment | `NO_EMBEDDED_XML` | — |
+| Missing, malformed or non-Factur-X XMP packet | `INVALID_XMP` (`parse` only) | — |
+| A font used without being embedded | — | `FONT_NOT_EMBEDDED`, naming the fonts |
+
+The font check exists because `generate` declares its output PDF/A-3, and PDF/A requires every font program embedded. A visual drawn with pdf-lib's `StandardFonts` embeds nothing, and would otherwise come out labelled PDF/A-3 while failing it. Embed the fonts when producing the visual (pdf-lib with `@pdf-lib/fontkit`, or any PDF/A-capable producer). This is the one PDF/A defect cheap enough to detect here; it is not a PDF/A validator — run veraPDF for that.
+
+XML is held to the same standard wherever it enters — `deserialize`, `parse`, the XMP packet, `generate({ xml })`, both validators:
+
+- **A `<!DOCTYPE>` is refused**, never expanded (XXE / entity expansion). `detectProfile` and `detectInvoiceNumber` return `undefined` for such a document.
+- **Numbers must be `xsd:decimal`**: `1e400`, `0x10`, `Infinity`, `1,5` or an empty element are errors, not `Infinity`, `16` or `0`. An optional amount that is present but unreadable is an error too, not a missing value.
+- **Dates must be real `YYYYMMDD` dates**: `20260230` is refused rather than rolled over to March 2nd.
 
 ## Work with the XML directly
 

@@ -22,6 +22,11 @@ export class FacturXSerializeError extends Error {
 }
 
 export function serialize(invoice: FacturXInvoice, profile: Profile): string {
+  // The type already says so; this is for JavaScript callers and `as` casts,
+  // which would otherwise get a TypeError from deep inside the builders.
+  if (!Object.hasOwn(GUIDELINE_URN, profile)) {
+    throw new FacturXSerializeError(`Unknown profile: ${profile}`);
+  }
   const currency = invoice.currency;
 
   const body =
