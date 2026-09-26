@@ -22,7 +22,9 @@ import type { GenerateFromInvoiceOptions, GenerateFromXmlOptions, GenerateOption
 import type { Profile } from '../types/profiles.js';
 import { serialize } from '../xml/serializer.js';
 import { detectInvoiceNumber, detectProfile } from '../xml/guideline.js';
-import { hasDoctype, resolveProfile, stripBom } from '../validate/shared.js';
+import { resolveProfile } from '../validate/shared.js';
+import { hasDoctype, stripBom } from '../xml/hygiene.js';
+import { loadPdf, unembeddedFonts } from './load.js';
 import { buildXmpMetadata } from './metadata.js';
 import { isFacturXFilespec } from './filespec.js';
 import {
@@ -32,15 +34,45 @@ import {
   type ValidationError,
 } from '../profiles/en16931.js';
 
+/**
+ * Why `generate` refused to write a PDF.
+ *
+ * - `INVALID_INVOICE` — the invoice breaks the profile's rules; the detail is
+ *   in `validationErrors`.
+ * - `INVALID_XML` — ready-made XML carrying a DOCTYPE. (An XML whose profile
+ *   cannot be determined throws `FacturXProfileNotDetectedError` instead, as
+ *   the validators do.)
+ * - `PROFILE_MISMATCH` — `options.profile` contradicts the XML's guideline URN.
+ * - `ENCRYPTED_PDF` / `MALFORMED_PDF` — the visual PDF cannot be opened.
+ * - `FONT_NOT_EMBEDDED` — the visual PDF uses a font it does not embed, so the
+ *   output could not honestly be declared PDF/A-3.
+ */
+export type FacturXGenerateErrorCode =
+  | 'INVALID_INVOICE'
+  | 'INVALID_XML'
+  | 'PROFILE_MISMATCH'
+  | 'ENCRYPTED_PDF'
+  | 'MALFORMED_PDF'
+  | 'FONT_NOT_EMBEDDED';
+
 export class FacturXGenerateError extends Error {
+  readonly code: FacturXGenerateErrorCode;
   readonly validationErrors: readonly ValidationError[];
 
-  constructor(message: string, validationErrors: readonly ValidationError[] = []) {
-    super(message);
+  constructor(
+    message: string,
+    code: FacturXGenerateErrorCode,
+    options: { validationErrors?: readonly ValidationError[]; cause?: unknown } = {},
+  ) {
+    super(message, { cause: options.cause });
     this.name = 'FacturXGenerateError';
-    this.validationErrors = validationErrors;
+    this.code = code;
+    this.validationErrors = options.validationErrors ?? [];
   }
 }
+
+const loadFailure = (code: FacturXGenerateErrorCode, message: string, cause: unknown): Error =>
+  new FacturXGenerateError(`visualPdf: ${message}`, code, { cause });
 
 const ICC_PROFILE_PATH = fileURLToPath(new URL('../../schemas/sRGB.icc', import.meta.url));
 const OUTPUT_CONDITION_IDENTIFIER = 'sRGB IEC61966-2.1';
@@ -62,7 +94,7 @@ export async function generate(options: GenerateOptions): Promise<Uint8Array> {
   const { xmlBytes, profile, title } =
     options.xml !== undefined ? payloadFromXml(options) : payloadFromInvoice(options);
 
-  const pdfDoc = options.visualPdf ? await PDFDocument.load(options.visualPdf) : await createBlankTemplate();
+  const pdfDoc = options.visualPdf ? await loadVisualPdf(options.visualPdf) : await createBlankTemplate();
   removeSupersededFacturXAttachments(pdfDoc);
   await ensureOutputIntent(pdfDoc);
 
@@ -110,7 +142,8 @@ function payloadFromInvoice(options: GenerateFromInvoiceOptions): Payload {
   if (errors.length > 0) {
     throw new FacturXGenerateError(
       `Invoice does not satisfy the ${profile} rules (${errors.length} error(s))`,
-      errors,
+      'INVALID_INVOICE',
+      { validationErrors: errors },
     );
   }
 
@@ -132,16 +165,18 @@ function payloadFromXml(options: GenerateFromXmlOptions): Payload {
   // Same untrusted-input policy as validateXsd / validateSchematron: a DOCTYPE
   // is refused before anything reads the document.
   if (hasDoctype(text)) {
-    throw new FacturXGenerateError('XML carries a DOCTYPE declaration, which is refused (XXE / entity expansion)');
+    throw new FacturXGenerateError('XML carries a DOCTYPE declaration, which is refused (XXE / entity expansion)', 'INVALID_XML');
   }
 
   // No fallback: the level goes into the XMP packet as a statement about the
   // document, and a guessed one is worse than no PDF.
+  // Throws FacturXProfileNotDetectedError, the same class both validators use.
   const profile = resolveProfile(text, options.profile);
   const declared = detectProfile(text);
   if (options.profile !== undefined && declared !== undefined && declared !== options.profile) {
     throw new FacturXGenerateError(
       `options.profile is "${options.profile}" but the XML's guideline URN declares "${declared}" — the XMP and the XML would contradict each other`,
+      'PROFILE_MISMATCH',
     );
   }
 
@@ -151,6 +186,19 @@ function payloadFromXml(options: GenerateFromXmlOptions): Payload {
     profile,
     title: number === undefined ? 'Factur-X' : `Factur-X — ${number}`,
   };
+}
+
+async function loadVisualPdf(bytes: Uint8Array): Promise<PDFDocument> {
+  const pdfDoc = await loadPdf(bytes, loadFailure);
+  const missing = unembeddedFonts(pdfDoc);
+  if (missing.length > 0) {
+    throw new FacturXGenerateError(
+      `visualPdf uses fonts it does not embed (${missing.join(', ')}); PDF/A-3 requires every font embedded, ` +
+        'so the output could not be declared PDF/A-3. Embed the fonts when producing the visual (e.g. pdf-lib with @pdf-lib/fontkit).',
+      'FONT_NOT_EMBEDDED',
+    );
+  }
+  return pdfDoc;
 }
 
 async function createBlankTemplate(): Promise<PDFDocument> {

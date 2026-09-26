@@ -8,6 +8,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Profile } from '../types/profiles.js';
 import { profileForGuidelineUrn } from '../types/profiles.js';
+import { hasDoctype, stripBom } from './hygiene.js';
 
 interface ParsedGuideline {
   readonly CrossIndustryInvoice?: {
@@ -33,9 +34,14 @@ const guidelineParser = new XMLParser({
   ignoreDeclaration: true,
 });
 
+// A document with a DOCTYPE yields no header facts rather than having its
+// entities expanded: every caller already treats "undetected" as a case to
+// handle, and the validators refuse such a document outright anyway.
 function parseHeader(xml: string): ParsedGuideline | undefined {
+  const text = stripBom(xml);
+  if (hasDoctype(text)) return undefined;
   try {
-    return guidelineParser.parse(xml) as ParsedGuideline;
+    return guidelineParser.parse(text) as ParsedGuideline;
   } catch {
     return undefined;
   }
