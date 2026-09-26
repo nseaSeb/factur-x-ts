@@ -2,7 +2,7 @@
 
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/) — while in `0.x`, a minor version may break the API.
 
-## [Unreleased] — planned as 0.3.0
+## [0.3.0] - Unreleased
 
 ### Breaking
 
