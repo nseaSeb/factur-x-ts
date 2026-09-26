@@ -255,12 +255,14 @@ BT-115 is `grandTotal - prepaid + rounding` (BR-CO-16). BT-111
 | Export | Description |
 | --- | --- |
 | `generate(options)` | `Promise<Uint8Array>` — a PDF/A-3b invoice, from `{ invoice, profile }` (validated, then serialized) or from `{ xml }` (embedded as given). Throws `FacturXGenerateError`; `FacturXProfileNotDetectedError` when `xml` declares no profile the library knows and none is passed. |
-| `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`. Throws `FacturXParseError`. |
+| `parse(buffer)` | `Promise<ParseResult>` — `{ invoice, metadata, rawXml }`, amounts as decimal strings. Throws `FacturXParseError` (with a `code`) or `FacturXDeserializeError`. |
 | `extract(buffer)` | `Promise<ExtractResult>` — `{ xml, filename, profile }`, the attachment as it is. Needs neither the XMP packet nor the deserializer, so it reads PDFs `parse` refuses. Throws `FacturXParseError` when the PDF carries no Factur-X attachment. |
 | `serialize(invoice, profile)` | `string` — CII XML, restricted to what the profile carries. Does not validate. |
 | `deserialize(xml)` | `FacturXInvoice` — CII XML into the model. Throws `FacturXDeserializeError` for a document it cannot express. |
 | `detectProfile(xml)`, `detectInvoiceNumber(xml)` | The profile (from the guideline URN) and BT-1, read off raw XML without deserializing; `undefined` when absent or unknown. |
 | `computeTotals(draft, options?)` | `TotalsResult` — derive BT-131, the VAT breakdown and BT-106 to BT-115 from a draft. Returns `{ ok: false, errors }` on a disagreement or on input it refuses to answer; it throws for no input the types allow (`NaN` included, which they do). |
+| `normalizeInvoice(invoice)` | `NormalizeResult` — every amount, quantity and rate checked and turned into a canonical decimal string, or every refused field with its path. What `serialize`, `validateEn16931`, `computeTotals` and `generate` run first. |
+| `validateDecimals(invoice)` | `ValidationResult` — the same check, reported as `INVALID_DECIMAL` validation errors. |
 | `validateEn16931(invoice, options?)` | `ValidationResult` — run the rules without generating a PDF. |
 | `validateXsd(xml, options?)` | `Promise<XsdValidationResult>` — validate CII XML against the bundled XSD of the document's profile — all five ship one. Requires the optional `xmllint-wasm` dependency. Throws `FacturXXsdNotBundledError` for a profile whose schema isn't bundled; falls back to `EN 16931` if the profile is omitted and can't be detected. |
 | `validateSchematron(xml, options?)` | `Promise<SchematronValidationResult>` — validate CII XML against the bundled Schematron business rules of the document's profile — all five ship one — via an external Saxon server. Throws `FacturXSchematronNotBundledError` for a profile whose rule set isn't bundled (unless `options.xsl` supplies one), `FacturXProfileNotDetectedError` if the profile is omitted and can't be detected, `FacturXSaxonError` if the server is unreachable, answers non-2xx, or returns a body that isn't a real SVRL report. |
