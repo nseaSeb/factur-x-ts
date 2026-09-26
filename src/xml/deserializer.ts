@@ -54,6 +54,7 @@ interface ParsedPostalAddress {
   readonly LineThree?: string;
   readonly CityName?: string;
   readonly CountryID?: string;
+  readonly CountrySubDivisionName?: string;
 }
 
 interface ParsedTradeContact {
@@ -129,6 +130,7 @@ interface ParsedLineTradeSettlement {
   readonly SpecifiedTradeAllowanceCharge?: readonly ParsedAllowanceCharge[];
   readonly SpecifiedTradeSettlementLineMonetarySummation?: { readonly LineTotalAmount?: AmountNode };
   readonly InvoiceReferencedDocument?: ParsedReferencedDocument;
+  readonly BillingSpecifiedPeriod?: ParsedBillingPeriod;
 }
 
 interface ParsedLineItem {
@@ -141,9 +143,14 @@ interface ParsedLineItem {
 
 interface ParsedPaymentMeans {
   readonly TypeCode?: string;
+  readonly Information?: string;
   readonly ApplicableTradeSettlementFinancialCard?: { readonly ID?: string; readonly CardholderName?: string };
   readonly PayerPartyDebtorFinancialAccount?: { readonly IBANID?: string };
-  readonly PayeePartyCreditorFinancialAccount?: { readonly IBANID?: string; readonly AccountName?: string };
+  readonly PayeePartyCreditorFinancialAccount?: {
+    readonly IBANID?: string;
+    readonly AccountName?: string;
+    readonly ProprietaryID?: string;
+  };
   readonly PayeeSpecifiedCreditorFinancialInstitution?: { readonly BICID?: string };
 }
 
@@ -167,7 +174,9 @@ interface ParsedMonetarySummation {
   readonly ChargeTotalAmount?: AmountNode;
   readonly AllowanceTotalAmount?: AmountNode;
   readonly TaxBasisTotalAmount?: AmountNode;
-  readonly TaxTotalAmount?: AmountNode;
+  // Up to two occurrences: BT-110, and BT-111 in the tax currency.
+  readonly TaxTotalAmount?: readonly AmountNode[];
+  readonly RoundingAmount?: AmountNode;
   readonly GrandTotalAmount?: AmountNode;
   readonly TotalPrepaidAmount?: AmountNode;
   readonly DuePayableAmount?: AmountNode;
@@ -184,6 +193,7 @@ interface ParsedPaymentTerms {
 }
 
 interface ParsedHeaderTradeSettlement {
+  readonly TaxCurrencyCode?: string;
   readonly InvoiceCurrencyCode?: string;
   readonly SpecifiedTradeSettlementPaymentMeans?: readonly ParsedPaymentMeans[];
   readonly ApplicableTradeTax?: readonly ParsedTradeTax[];
@@ -194,9 +204,16 @@ interface ParsedHeaderTradeSettlement {
   readonly InvoiceReferencedDocument?: readonly ParsedReferencedDocument[];
 }
 
+interface ParsedHeaderTradeDelivery {
+  readonly ShipToTradeParty?: ParsedTradeParty;
+  readonly ActualDeliverySupplyChainEvent?: ParsedSupplyChainEvent;
+}
+
 interface ParsedSupplyChainTradeTransaction {
   readonly IncludedSupplyChainTradeLineItem?: readonly ParsedLineItem[];
   readonly ApplicableHeaderTradeAgreement?: ParsedHeaderTradeAgreement;
+  // An empty element parses to '' — not an object.
+  readonly ApplicableHeaderTradeDelivery?: ParsedHeaderTradeDelivery | '';
   readonly ApplicableHeaderTradeSettlement?: ParsedHeaderTradeSettlement;
 }
 
@@ -228,6 +245,7 @@ const ARRAY_PATHS = new Set<string>([
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.ApplicableTradeTax',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.InvoiceReferencedDocument',
   'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.SpecifiedTradeAllowanceCharge',
+  'CrossIndustryInvoice.SupplyChainTradeTransaction.ApplicableHeaderTradeSettlement.SpecifiedTradeSettlementHeaderMonetarySummation.TaxTotalAmount',
   // EXTENDED's XSD (unlike EN 16931's) declares maxOccurs="unbounded" here,
   // for repeated installment terms; this library's model only carries one
   // paymentTerms/paymentDueDate pair, so a multi-instance document has its
@@ -240,9 +258,7 @@ const ARRAY_PATHS = new Set<string>([
   'CrossIndustryInvoice.SupplyChainTradeTransaction.IncludedSupplyChainTradeLineItem.AssociatedDocumentLineDocument.IncludedNote',
 ]);
 
-const CURRENCY_CODES: readonly CurrencyCode[] = ['EUR', 'USD', 'GBP'];
-const DOCUMENT_TYPE_CODES: readonly DocumentTypeCode[] = ['380', '381', '386', '500'];
-const VAT_CATEGORY_CODES: readonly VatCategoryCode[] = ['S', 'E', 'Z', 'G', 'O', 'K', 'AE'];
+const VAT_CATEGORY_CODES: readonly VatCategoryCode[] = ['S', 'E', 'Z', 'G', 'O', 'K', 'AE', 'L', 'M'];
 
 export function deserialize(xml: string): ParsedInvoice {
   const parser = new XMLParser({
@@ -298,7 +314,13 @@ export function deserialize(xml: string): ParsedInvoice {
   const { entries: taxBreakdown, documentCode: taxDueDateTypeCode } = normalizeVatPointDate(
     (settlement.ApplicableTradeTax ?? []).map(parseTaxBreakdown),
   );
-  const totals = parseMonetaryTotals(settlement.SpecifiedTradeSettlementHeaderMonetarySummation);
+  const currency = asCurrencyCode(settlement.InvoiceCurrencyCode);
+  const taxCurrency = settlement.TaxCurrencyCode;
+  if (taxCurrency !== undefined) asCurrencyCode(taxCurrency);
+  const totals = parseMonetaryTotals(settlement.SpecifiedTradeSettlementHeaderMonetarySummation, currency, taxCurrency);
+  const delivery = typeof transaction.ApplicableHeaderTradeDelivery === 'object' ? transaction.ApplicableHeaderTradeDelivery : undefined;
+  const shipTo = delivery?.ShipToTradeParty ? parseTradeParty(delivery.ShipToTradeParty) : undefined;
+  const deliveryDateText = textOf(delivery?.ActualDeliverySupplyChainEvent?.OccurrenceDateTime?.DateTimeString);
   const paymentMeans = (settlement.SpecifiedTradeSettlementPaymentMeans ?? []).map(parsePaymentMeans);
   const precedingInvoices = (settlement.InvoiceReferencedDocument ?? []).map(parsePrecedingInvoice);
   const billingPeriod = settlement.BillingSpecifiedPeriod
@@ -319,7 +341,8 @@ export function deserialize(xml: string): ParsedInvoice {
   return {
     number: document.ID,
     issueDate: requireDate(document.IssueDateTime, 'rsm:ExchangedDocument/ram:IssueDateTime'),
-    currency: asCurrencyCode(settlement.InvoiceCurrencyCode),
+    currency,
+    ...(taxCurrency !== undefined ? { taxCurrency } : {}),
     typeCode: asDocumentTypeCode(document.TypeCode),
     seller: parseTradeParty(agreement.SellerTradeParty),
     buyer: parseTradeParty(agreement.BuyerTradeParty),
@@ -333,6 +356,8 @@ export function deserialize(xml: string): ParsedInvoice {
     ...(charges.length > 0 ? { charges } : {}),
     ...(notes.length > 0 ? { notes } : {}),
     ...(billingPeriod ? { billingPeriod } : {}),
+    ...(shipTo !== undefined ? { shipTo } : {}),
+    ...(deliveryDateText !== undefined ? { deliveryDate: parseDate102(deliveryDateText) } : {}),
     ...(paymentMeans.length > 0 ? { paymentMeans } : {}),
     ...(precedingInvoices.length > 0 ? { precedingInvoices } : {}),
     ...(businessProcess ? { businessProcess } : {}),
@@ -399,6 +424,7 @@ function parseTradeParty(node: ParsedTradeParty): TradeParty {
           ...(address.PostcodeCode ? { postcode: address.PostcodeCode } : {}),
           ...(address.CityName ? { city: address.CityName } : {}),
           country: address.CountryID,
+          ...(address.CountrySubDivisionName ? { countrySubdivision: address.CountrySubDivisionName } : {}),
         };
 
   const vatId = textOf(node.SpecifiedTaxRegistration?.ID);
@@ -494,6 +520,8 @@ function parseLineItem(node: ParsedLineItem): LineItem<string> {
     : undefined;
   const linePrecedingInvoiceNode = node.SpecifiedLineTradeSettlement?.InvoiceReferencedDocument;
   const linePrecedingInvoice = linePrecedingInvoiceNode ? parsePrecedingInvoice(linePrecedingInvoiceNode) : undefined;
+  const lineBillingPeriodNode = node.SpecifiedLineTradeSettlement?.BillingSpecifiedPeriod;
+  const lineBillingPeriod = lineBillingPeriodNode ? parseBillingPeriod(lineBillingPeriodNode) : undefined;
 
   return {
     id,
@@ -513,6 +541,7 @@ function parseLineItem(node: ParsedLineItem): LineItem<string> {
     ...(shipTo !== undefined ? { shipTo } : {}),
     ...(deliveryDate !== undefined ? { deliveryDate } : {}),
     ...(linePrecedingInvoice !== undefined ? { precedingInvoice: linePrecedingInvoice } : {}),
+    ...(lineBillingPeriod !== undefined ? { billingPeriod: lineBillingPeriod } : {}),
   };
 }
 
@@ -561,13 +590,26 @@ function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown<string> {
   };
 }
 
-function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals<string> {
+function parseMonetaryTotals(
+  node: ParsedMonetarySummation,
+  currency: string,
+  taxCurrency: string | undefined,
+): MonetaryTotals<string> {
+  // BT-110 and BT-111 share an element name and differ by currencyID alone.
+  // An occurrence without one is BT-110, as every single-currency producer
+  // writes it; with one, it goes to whichever currency it names.
+  const taxTotals = node.TaxTotalAmount ?? [];
+  const currencyOf = (n: AmountNode): string | undefined => (typeof n === 'object' ? n['@_currencyID'] : undefined);
+  const taxTotalNode = taxTotals.find((n) => currencyOf(n) === undefined || currencyOf(n) === currency);
+  const taxTotalInTaxCurrencyNode =
+    taxCurrency !== undefined && taxCurrency !== currency ? taxTotals.find((n) => currencyOf(n) === taxCurrency) : undefined;
+
   // BT-106 is not in the required set: MINIMUM's summation carries four
   // amounts and no ram:LineTotalAmount, so demanding it here would make every
   // MINIMUM document unreadable. The four below are the ones every profile has.
   if (
     node.TaxBasisTotalAmount === undefined ||
-    node.TaxTotalAmount === undefined ||
+    taxTotalNode === undefined ||
     node.GrandTotalAmount === undefined ||
     node.DuePayableAmount === undefined
   ) {
@@ -578,13 +620,18 @@ function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals<stri
   const allowanceTotal = parseOptionalAmount(node.AllowanceTotalAmount, 'AllowanceTotalAmount');
   const chargeTotal = parseOptionalAmount(node.ChargeTotalAmount, 'ChargeTotalAmount');
   const prepaid = parseOptionalAmount(node.TotalPrepaidAmount, 'TotalPrepaidAmount');
+  const rounding = parseOptionalAmount(node.RoundingAmount, 'RoundingAmount');
+  const taxTotalInTaxCurrency =
+    taxTotalInTaxCurrencyNode === undefined ? undefined : requireAmount(taxTotalInTaxCurrencyNode, 'TaxTotalAmount (tax currency)');
 
   return {
     ...(lineTotal !== undefined ? { lineTotal } : {}),
     ...(allowanceTotal !== undefined ? { allowanceTotal } : {}),
     ...(chargeTotal !== undefined ? { chargeTotal } : {}),
     taxBasisTotal: requireAmount(node.TaxBasisTotalAmount, 'TaxBasisTotalAmount'),
-    taxTotal: requireAmount(node.TaxTotalAmount, 'TaxTotalAmount'),
+    taxTotal: requireAmount(taxTotalNode, 'TaxTotalAmount'),
+    ...(taxTotalInTaxCurrency !== undefined ? { taxTotalInTaxCurrency } : {}),
+    ...(rounding !== undefined ? { rounding } : {}),
     grandTotal: requireAmount(node.GrandTotalAmount, 'GrandTotalAmount'),
     ...(prepaid !== undefined ? { prepaid } : {}),
     duePayable: requireAmount(node.DuePayableAmount, 'DuePayableAmount'),
@@ -615,9 +662,12 @@ function parsePaymentMeans(node: ParsedPaymentMeans): PaymentMean {
   const payerIban = node.PayerPartyDebtorFinancialAccount?.IBANID;
   const cardId = node.ApplicableTradeSettlementFinancialCard?.ID;
   const cardholderName = node.ApplicableTradeSettlementFinancialCard?.CardholderName;
+  const accountId = node.PayeePartyCreditorFinancialAccount?.ProprietaryID;
 
   return {
     typeCode: node.TypeCode,
+    ...(node.Information ? { information: node.Information } : {}),
+    ...(accountId ? { accountId } : {}),
     ...(iban ? { iban } : {}),
     ...(accountName ? { accountName } : {}),
     ...(bic ? { bic } : {}),
@@ -687,14 +737,16 @@ function parseDate102(text: string): Date {
   return date;
 }
 
+// Shape only, not the ISO 4217 list: a code this library has never heard of
+// is still a currency, and the Schematron checks the list (BR-CL-04).
 function asCurrencyCode(value: string): CurrencyCode {
-  if ((CURRENCY_CODES as readonly string[]).includes(value)) return value as CurrencyCode;
-  throw new FacturXDeserializeError(`Unsupported currency code: ${value}`);
+  if (/^[A-Z]{3}$/.test(value)) return value;
+  throw new FacturXDeserializeError(`Invalid currency code: ${value} (expected three upper-case letters, ISO 4217)`);
 }
 
+// Any UNTDID 1001 code is read back; the Schematron checks the list (BR-CL-01).
 function asDocumentTypeCode(value: string): DocumentTypeCode {
-  if ((DOCUMENT_TYPE_CODES as readonly string[]).includes(value)) return value as DocumentTypeCode;
-  throw new FacturXDeserializeError(`Unsupported document type code: ${value}`);
+  return value;
 }
 
 function asVatCategoryCode(value: string): VatCategoryCode {

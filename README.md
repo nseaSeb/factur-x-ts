@@ -139,7 +139,7 @@ const pdfBytes = await generate({ xml: bytes, visualPdf: await readFile('rendere
 
 `extract` is deliberately more permissive than `parse`: it never opens the XMP packet and never runs the deserializer, so it works on a PDF whose metadata is missing or malformed, and on a document this library's model cannot express. `profile` comes from the guideline URN in the XML itself, and is `undefined` for a URN the library does not know — never a guess.
 
-`deserialize` is strict to this library's model, and making it public makes that visible: `currency` is a closed `'EUR' | 'USD' | 'GBP'` and `typeCode` a closed `'380' | '381' | '386' | '500'`, so a CHF invoice or a `'503'` down-payment document throws `FacturXDeserializeError`. `extract` plus `generate({ xml })` is the path for a document `deserialize` cannot model — it never needs to.
+`deserialize` is strict to this library's model, and making it public makes that visible: a document it cannot represent throws `FacturXDeserializeError` rather than coming back with a field quietly missing. Code lists are open — any three-letter ISO 4217 currency (`CHF`) and any UNTDID 1001 document type (`503`) read back, since the Schematron is what checks those lists. `extract` plus `generate({ xml })` is the path for a document `deserialize` cannot model — it never needs to.
 
 ## Amounts are decimals, not floats
 
@@ -245,10 +245,10 @@ An entry you supplied is completed, never replaced: BT-120 and BT-121 (the VAT
 exemption reason and its code) cannot be derived from amounts, and category `E`
 is rejected without them (BR-E-10).
 
-Two amounts are never derived, because nothing in the invoice determines them.
-BT-113 (`prepaid`) is carried through as given and subtracted from BT-115
-(BR-CO-16). BT-114, the rounding amount, has no field in `MonetaryTotals` yet —
-see [Limitations](#limitations).
+Three amounts are never derived, because nothing in the invoice determines them.
+BT-113 (`prepaid`) and BT-114 (`rounding`) are carried through as given, and
+BT-115 is `grandTotal - prepaid + rounding` (BR-CO-16). BT-111
+(`taxTotalInTaxCurrency`) needs an exchange rate, and is carried as given too.
 
 ## API
 
@@ -358,6 +358,27 @@ Declaring a non-zero `allowanceTotal` with no document-level allowance behind it
 
 Line-level allowances/charges are also checked arithmetically: `line.lineTotal` must equal `line.netPrice × line.quantity`, adjusted by that line's own `allowances`/`charges` — `validateEn16931` rejects a line where it doesn't (no dedicated EN 16931 rule number covers this specifically, unlike the header sums below).
 
+## Delivery, second currency, rounding
+
+These fields each start at a profile floor. Below it they are not written, the same way every other field is gated.
+
+| Field | Business terms | From |
+|---|---|---|
+| `shipTo` | BG-13: BT-70 name, BT-71 `globalId`, BG-15 address | BASIC WL |
+| `deliveryDate` | BT-72 | BASIC WL |
+| `taxCurrency`, `totals.taxTotalInTaxCurrency` | BT-6, BT-111 | BASIC WL |
+| `address.countrySubdivision` | BT-39 / BT-54 / BT-68 / BT-79 | BASIC WL |
+| `paymentMeans[].accountId` | BT-84 for a non-IBAN account | BASIC WL |
+| `lines[].billingPeriod` | BG-26 | BASIC |
+| `paymentMeans[].information` | BT-82 | EN 16931 |
+| `totals.rounding` | BT-114 | EN 16931 |
+
+`shipTo` writes only what BG-13 carries. A `vatId` or `legalId` on it has no business term to land in and is left out.
+
+`taxCurrency` must differ from `currency`, and needs `taxTotalInTaxCurrency` (BR-53). The Schematron tells BT-110 and BT-111 apart by their currency alone, so two identical ones are rejected. `validateEn16931` checks both.
+
+A non-zero `totals.rounding` is refused by `generate` below EN 16931 with `UNEMITTABLE_ROUNDING_AMOUNT`. Those profiles have no element for it, and dropping it would leave an amount due that contradicts BR-CO-16. The BASIC WL rule set rejects exactly that document.
+
 ## Payment terms (BT-9 / BT-20)
 
 `paymentDueDate` (BT-9) and `paymentTerms` (BT-20, free text) serialize to `ram:SpecifiedTradePaymentTerms`. Whenever `totals.duePayable` is positive, `validateEn16931` requires at least one of the two — mirroring BR-CO-25, which the EXTENDED Schematron enforces (EN 16931's doesn't carry this particular rule, but the underlying field is the same, so checking it here is never a false positive).
@@ -457,7 +478,6 @@ Every profile ships a bundled XSD and rule set, checkable with [`validateXsd`](#
 Left as-is, either unverifiable or deliberate — not correctness bugs:
 
 - A caller-supplied amount with more than two decimals is rounded to two when serialized (half away from zero), not refused. `validateEn16931` compares at the cent, so such an invoice is accepted as long as its sums hold once rounded.
-- BT-114 (the rounding amount) has no field in `MonetaryTotals`, so it is neither serialized nor usable in `computeTotals`. BR-CO-16 is therefore `duePayable = grandTotal - prepaid`, with no rounding term.
 - `parse` requires `fx:Version` to equal `1.07` exactly, by design rather than oversight: `1.07` is the only Factur-X/ZUGFeRD version whose XMP shape this parser was written against, and it's also the only version `generate` ever writes. A PDF declaring a different version may well be a legitimate Factur-X document under an older or newer XMP shape, which `parse` currently has no way to read.
 
 ## XSD validation

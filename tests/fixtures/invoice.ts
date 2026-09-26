@@ -137,7 +137,7 @@ export function atWireScale(invoice: FacturXInvoice): ParsedInvoice {
       };
     });
   const { allowances, charges, ...rest } = invoice;
-  const { lineTotal, allowanceTotal, chargeTotal, prepaid, ...totals } = invoice.totals;
+  const { lineTotal, allowanceTotal, chargeTotal, prepaid, rounding, taxTotalInTaxCurrency, ...totals } = invoice.totals;
 
   return {
     ...rest,
@@ -172,6 +172,8 @@ export function atWireScale(invoice: FacturXInvoice): ParsedInvoice {
       ...(allowanceTotal !== undefined ? { allowanceTotal: two(allowanceTotal) } : {}),
       ...(chargeTotal !== undefined ? { chargeTotal: two(chargeTotal) } : {}),
       ...(prepaid !== undefined ? { prepaid: two(prepaid) } : {}),
+      ...(rounding !== undefined ? { rounding: two(rounding) } : {}),
+      ...(taxTotalInTaxCurrency !== undefined ? { taxTotalInTaxCurrency: two(taxTotalInTaxCurrency) } : {}),
     },
   };
 }
@@ -196,7 +198,20 @@ export function maximalInvoice(): FacturXInvoice {
       vatId: 'FR99999999999',
       address: { lineOne: '9 rue du Fisc', postcode: '75009', city: 'Paris', country: 'FR' },
     },
-    seller: { ...base.seller, globalId: '123456789', globalScheme: '0231' },
+    seller: {
+      ...base.seller,
+      globalId: '123456789',
+      globalScheme: '0231',
+      ...(base.seller.address ? { address: { ...base.seller.address, countrySubdivision: 'Île-de-France' } } : {}),
+    },
+    taxCurrency: 'USD',
+    shipTo: {
+      name: 'Site client',
+      globalId: '3012345000019',
+      globalScheme: '0088',
+      address: { lineOne: '1 rue du Site', postcode: '69001', city: 'Lyon', country: 'FR', countrySubdivision: 'Rhône' },
+    },
+    deliveryDate: new Date(Date.UTC(2026, 6, 15)),
     buyer: {
       ...base.buyer,
       vatId: 'FR98765432109',
@@ -208,7 +223,9 @@ export function maximalInvoice(): FacturXInvoice {
     paymentMeans: [
       {
         typeCode: '58',
+        information: 'Virement SEPA',
         iban: 'FR7630006000011234567890189',
+        accountId: 'ACC-42',
         accountName: 'ACME SARL',
         bic: 'BNPAFRPPXXX',
         payerIban: 'FR7630006000011234567890190',
@@ -221,6 +238,7 @@ export function maximalInvoice(): FacturXInvoice {
       {
         ...base.lines[0]!,
         description: 'Conseil stratégique, forfait mensuel',
+        billingPeriod: { startDate: new Date(Date.UTC(2026, 6, 1)), endDate: new Date(Date.UTC(2026, 6, 15)) },
         notes: [{ content: 'Livré en deux temps', subjectCode: 'AAI' }],
         shipTo: {
           name: 'Entrepôt Nord',
@@ -238,6 +256,6 @@ export function maximalInvoice(): FacturXInvoice {
         exemptionReason: undefined,
       },
     ],
-    totals: { ...base.totals, chargeTotal: 3, prepaid: 50 },
+    totals: { ...base.totals, chargeTotal: 3, prepaid: 50, rounding: '0.01', taxTotalInTaxCurrency: '42.12' },
   };
 }
