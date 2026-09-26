@@ -92,6 +92,12 @@ describe('code lists are open, their shape is not', () => {
     expect(validateEn16931({ ...base, currency: 'euro' }).errors.map((e) => e.code)).toContain('INVALID_CURRENCY_CODE');
   });
 
+  it('applies G1.60 to 503, now that the model can carry it', () => {
+    const base = sampleInvoice();
+    const errors = validateEn16931({ ...base, businessProcess: 'S4', typeCode: '503' }, { validateFrenchRules: true }).errors;
+    expect(errors.map((e) => e.code)).toContain('FORBIDDEN_TYPE_CODE_FOR_BUSINESS_PROCESS');
+  });
+
   it('accepts the Canary Islands and Ceuta/Melilla categories', () => {
     const base = sampleInvoice();
     const invoice = {
@@ -157,7 +163,12 @@ describe('the new fields against the official rule sets', () => {
       })),
       taxBreakdown: base.taxBreakdown.map(({ basisAmount: _b, calculatedAmount: _c, ...tb }) => tb),
       taxCurrency: 'USD',
-      shipTo: { name: 'Site client', address: { lineOne: '1 rue du Site', postcode: '69001', city: 'Lyon', country: 'FR', countrySubdivision: 'Rhône' } },
+      shipTo: {
+        name: 'Site client',
+        globalId: '3012345000019',
+        globalScheme: '0088',
+        address: { lineOne: '1 rue du Site', postcode: '69001', city: 'Lyon', country: 'FR', countrySubdivision: 'Rhône' },
+      },
       deliveryDate: new Date(Date.UTC(2026, 6, 15)),
       paymentMeans: [{ typeCode: '30', information: 'Virement', accountId: 'ACC-42' }],
       totals: { ...(rounding !== undefined ? { rounding } : {}), taxTotalInTaxCurrency: '42.12' },
