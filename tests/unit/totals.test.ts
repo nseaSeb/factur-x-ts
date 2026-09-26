@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { computeTotals } from '../../src/totals.js';
 import { validateEn16931 } from '../../src/profiles/en16931.js';
 import type { DraftInvoice, DraftLineItem } from '../../src/types/index.js';
-import { sampleInvoice } from '../fixtures/invoice.js';
+import { atWireScale, sampleInvoice } from '../fixtures/invoice.js';
 
 /** The sample invoice with every derivable figure stripped back out. */
 function draftFromSample(): DraftInvoice {
@@ -44,16 +44,16 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.invoice.lines[0]!.lineTotal).toBe(99.99);
+    expect(result.invoice.lines[0]!.lineTotal).toBe('99.99');
     expect(result.invoice.taxBreakdown).toEqual([
-      { type: 'VAT', category: 'S', rate: 5.5, basisAmount: 99.99, calculatedAmount: 5.5 },
+      { type: 'VAT', category: 'S', rate: '5.5', basisAmount: '99.99', calculatedAmount: '5.50' },
     ]);
     expect(result.invoice.totals).toEqual({
-      lineTotal: 99.99,
-      taxBasisTotal: 99.99,
-      taxTotal: 5.5,
-      grandTotal: 105.49,
-      duePayable: 105.49,
+      lineTotal: '99.99',
+      taxBasisTotal: '99.99',
+      taxTotal: '5.50',
+      grandTotal: '105.49',
+      duePayable: '105.49',
     });
   });
 
@@ -76,9 +76,9 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.invoice.totals.lineTotal).toBe(99.99);
-    expect(result.invoice.totals.taxTotal).toBe(5.5);
-    expect(result.invoice.totals.grandTotal).toBe(105.49);
+    expect(result.invoice.totals.lineTotal).toBe('99.99');
+    expect(result.invoice.totals.taxTotal).toBe('5.50');
+    expect(result.invoice.totals.grandTotal).toBe('105.49');
     expect(validateEn16931(result.invoice)).toEqual({ valid: true, errors: [] });
   });
 
@@ -97,8 +97,12 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.invoice.totals).toEqual(sampleInvoice().totals);
-    expect(result.invoice.taxBreakdown).toEqual(sampleInvoice().taxBreakdown);
+    // Amounts come back at two decimals; a rate keeps the caller's own spelling.
+    const expected = atWireScale(sampleInvoice());
+    expect(result.invoice.totals).toEqual(expected.totals);
+    expect(result.invoice.taxBreakdown).toEqual(
+      expected.taxBreakdown.map((tb) => ({ ...tb, rate: String(Number(tb.rate)) })),
+    );
   });
 
   it('folds line-level allowances and charges into BT-131', () => {
@@ -115,8 +119,8 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.invoice.lines[0]!.lineTotal).toBe(185);
-    expect(result.invoice.totals.lineTotal).toBe(185);
+    expect(result.invoice.lines[0]!.lineTotal).toBe('185.00');
+    expect(result.invoice.totals.lineTotal).toBe('185.00');
     // Folded into the line, so they never reach BT-107 / BT-108.
     expect(result.invoice.totals.allowanceTotal).toBeUndefined();
     expect(result.invoice.totals.chargeTotal).toBeUndefined();
@@ -133,15 +137,15 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.invoice.totals).toMatchObject({
-      lineTotal: 200,
-      allowanceTotal: 20,
-      chargeTotal: 5,
-      taxBasisTotal: 185,
-      taxTotal: 37,
-      grandTotal: 222,
-      duePayable: 222,
+      lineTotal: '200.00',
+      allowanceTotal: '20.00',
+      chargeTotal: '5.00',
+      taxBasisTotal: '185.00',
+      taxTotal: '37.00',
+      grandTotal: '222.00',
+      duePayable: '222.00',
     });
-    expect(result.invoice.taxBreakdown[0]!.basisAmount).toBe(185);
+    expect(result.invoice.taxBreakdown[0]!.basisAmount).toBe('185.00');
   });
 
   it('subtracts a stated BT-113 from BT-115 without deriving it (BR-CO-16)', () => {
@@ -149,9 +153,9 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.invoice.totals.grandTotal).toBe(120);
-    expect(result.invoice.totals.prepaid).toBe(50);
-    expect(result.invoice.totals.duePayable).toBe(70);
+    expect(result.invoice.totals.grandTotal).toBe('120.00');
+    expect(result.invoice.totals.prepaid).toBe('50');
+    expect(result.invoice.totals.duePayable).toBe('70.00');
   });
 
   it('completes a supplied breakdown entry rather than replacing it', () => {
@@ -173,9 +177,9 @@ describe('computeTotals', () => {
     expect(result.invoice.taxBreakdown[0]).toEqual({
       type: 'VAT',
       category: 'E',
-      rate: 0,
-      basisAmount: 100,
-      calculatedAmount: 0,
+      rate: '0',
+      basisAmount: '100.00',
+      calculatedAmount: '0.00',
       exemptionReason: 'Exonération art. 262 ter I',
       exemptionReasonCode: 'VATEX-EU-IC',
     });
@@ -195,9 +199,9 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.invoice.taxBreakdown.map((tb) => [tb.category, tb.rate, tb.basisAmount])).toEqual([
-      ['Z', 0, 10],
-      ['S', 5.5, 50],
-      ['S', 20, 130],
+      ['Z', '0', '10.00'],
+      ['S', '5.5', '50.00'],
+      ['S', '20', '130.00'],
     ]);
   });
 
@@ -211,8 +215,8 @@ describe('computeTotals', () => {
         code: 'TOTALS_MISMATCH',
         field: 'totals.grandTotal',
         message: 'totals.grandTotal: stated 999.00, derived 120.00',
-        given: 999,
-        computed: 120,
+        given: '999',
+        computed: '120.00',
       },
     ]);
   });
@@ -238,7 +242,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors).toMatchObject([{ field: 'totals.allowanceTotal', given: 20, computed: 0 }]);
+    expect(result.errors).toMatchObject([{ field: 'totals.allowanceTotal', given: '20', computed: '0' }]);
   });
 
   it('takes the computed figures with overwrite', () => {
@@ -248,7 +252,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.invoice.totals.grandTotal).toBe(120);
+    expect(result.invoice.totals.grandTotal).toBe('120.00');
   });
 
   it('refuses to derive anything from an invoice with no lines', () => {
@@ -301,26 +305,27 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // Accepted, but the derived figure is still what lands in the document.
-    expect(result.invoice.taxBreakdown[0]!.calculatedAmount).toBe(5.5);
+    expect(result.invoice.taxBreakdown[0]!.calculatedAmount).toBe('5.50');
   });
 
   it('accepts a complete, internally consistent set from a decimal-based caller', () => {
-    // 53.50 at 5% is 2.675: 2.67 by float representation here, 2.68 half-up in
-    // a Decimal system. Slacking BT-117 alone would be pointless — the caller
-    // states the totals built on it too, and comparing *those* exactly would
-    // refuse the whole document the Schematron accepts.
+    // 53.50 at 5% is exactly 2.675: 2.68 half away from zero, which is what
+    // this library now derives, but 2.67 from an implementation rounding the
+    // float (2.675 is stored as 2.67499999…). Slacking BT-117 alone would be
+    // pointless — the caller states the totals built on it too, and comparing
+    // *those* exactly would refuse the whole document the Schematron accepts.
     const result = computeTotals(
       draft([line({ netPrice: 53.5, quantity: 1, vatRate: 5 })], {
-        taxBreakdown: [{ category: 'S', rate: 5, basisAmount: 53.5, calculatedAmount: 2.68 }],
-        totals: { lineTotal: 53.5, taxBasisTotal: 53.5, taxTotal: 2.68, grandTotal: 56.18, duePayable: 56.18 },
+        taxBreakdown: [{ category: 'S', rate: 5, basisAmount: 53.5, calculatedAmount: 2.67 }],
+        totals: { lineTotal: 53.5, taxBasisTotal: 53.5, taxTotal: 2.67, grandTotal: 56.17, duePayable: 56.17 },
       }),
     );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // Accepted, but the derived figures are still what land in the document.
-    expect(result.invoice.totals.taxTotal).toBe(2.67);
-    expect(result.invoice.totals.grandTotal).toBe(56.17);
+    expect(result.invoice.totals.taxTotal).toBe('2.68');
+    expect(result.invoice.totals.grandTotal).toBe('56.18');
   });
 
   it('still reports a VAT-derived total off by more than a cent per group', () => {
@@ -332,7 +337,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors).toMatchObject([{ field: 'totals.grandTotal', given: 56.2, computed: 56.17 }]);
+    expect(result.errors).toMatchObject([{ field: 'totals.grandTotal', given: '56.2', computed: '56.18' }]);
   });
 
   it('still reports a stated BT-117 that is off by more than a cent', () => {
@@ -345,7 +350,7 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toMatchObject([
-      { field: 'taxBreakdown[0].calculatedAmount', given: 5.47, computed: 5.5 },
+      { field: 'taxBreakdown[0].calculatedAmount', given: '5.47', computed: '5.50' },
     ]);
   });
 
@@ -355,7 +360,7 @@ describe('computeTotals', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toMatchObject([
-      { code: 'NOT_A_FINITE_AMOUNT', field: 'lines[0].netPrice' },
+      { code: 'INVALID_DECIMAL', field: 'lines[0].netPrice' },
     ]);
   });
 
@@ -366,7 +371,7 @@ describe('computeTotals', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.invoice.lines[0]!.lineTotal).toBe(200);
-    expect(result.invoice.totals.lineTotal).toBe(200);
+    expect(result.invoice.lines[0]!.lineTotal).toBe('200.00');
+    expect(result.invoice.totals.lineTotal).toBe('200.00');
   });
 });

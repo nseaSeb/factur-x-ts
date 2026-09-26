@@ -13,6 +13,8 @@ export type ValidationErrorCode =
   | 'MISSING_BUYER_VAT_ID'
   | 'MISSING_TAX_BREAKDOWN_GROUP'
   | 'AMOUNT_MISMATCH'
+  // NaN, Infinity, a malformed string, or a number showing float drift.
+  | 'INVALID_DECIMAL'
   // BR-CL-06: BT-8 restricted by EN 16931 to a subset of UNTDID 2475.
   | 'INVALID_VAT_POINT_DATE'
   | 'UNEMITTABLE_VAT_POINT_DATE'

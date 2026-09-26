@@ -34,8 +34,21 @@ describe('deserialize refuses what Number() would silently accept', () => {
     expect(() => deserialize(withGrandTotal('1'.repeat(40)))).toThrow(/GrandTotalAmount/);
   });
 
-  it.each(['1234.50', '-3.20', '+7', '.5', '10.'])('accepts the xsd:decimal form "%s"', (text) => {
-    expect(deserialize(withGrandTotal(text)).totals.grandTotal).toBe(Number(text));
+  it.each([
+    ['1234.50', '1234.50'],
+    ['-3.20', '-3.20'],
+    ['+7', '7'],
+    ['.5', '0.5'],
+    ['10.', '10'],
+    ['007.10', '7.10'],
+  ])('accepts the xsd:decimal form "%s", read back as the canonical "%s"', (text, canonical) => {
+    expect(deserialize(withGrandTotal(text)).totals.grandTotal).toBe(canonical);
+  });
+
+  it('keeps every digit of an amount a float could not hold', () => {
+    const big = '12345678901234567890.12';
+    expect(Number(big).toFixed(2)).not.toBe(big);
+    expect(deserialize(withGrandTotal(big)).totals.grandTotal).toBe(big);
   });
 
   it('refuses an optional amount that is present but unreadable, rather than dropping it', () => {
@@ -133,6 +146,7 @@ describe('visual PDF fonts', () => {
     const donor = await PDFDocument.create();
     donor.addPage().drawText('x', { font: await donor.embedFont(StandardFonts.Courier) });
     const [embedded] = await visual.embedPdf(await donor.save());
+    if (!embedded) throw new Error('embedPdf returned no page');
     visual.addPage().drawPage(embedded);
     void font;
     const error = await generate({ invoice: sampleInvoice(), profile: 'EN 16931', visualPdf: await visual.save() }).catch(

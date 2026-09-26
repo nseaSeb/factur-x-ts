@@ -1,7 +1,8 @@
 // tests/fixtures/invoice.ts
 // Shared EN 16931-valid sample invoice for unit and e2e tests.
 
-import type { FacturXInvoice } from '../../src/types/index.js';
+import type { AllowanceCharge, DecimalInput, FacturXInvoice, ParsedInvoice } from '../../src/types/index.js';
+import { dec, toFixed } from '../../src/decimal.js';
 
 export function sampleInvoice(): FacturXInvoice {
   return {
@@ -88,7 +89,8 @@ export function sampleInvoice(): FacturXInvoice {
  * them so that a future fixture of either shape does not read as a deserializer
  * bug. See normalizeVatPointDate in src/xml/deserializer.ts.
  */
-export function expectedRoundTrip(invoice: FacturXInvoice): FacturXInvoice {
+export function expectedRoundTrip(source: FacturXInvoice): ParsedInvoice {
+  const invoice = atWireScale(source);
   const effective = invoice.taxBreakdown.map((tb) => tb.dueDateTypeCode ?? invoice.taxDueDateTypeCode);
   const distinct = new Set(effective);
   const uniform = effective.length > 0 && distinct.size === 1 && !distinct.has(undefined);
@@ -110,6 +112,67 @@ export function expectedRoundTrip(invoice: FacturXInvoice): FacturXInvoice {
       ...tb,
       ...(effective[index] !== undefined ? { dueDateTypeCode: effective[index] } : {}),
     })),
+  };
+}
+
+/**
+ * The invoice as its decimals come back from the wire: canonical strings at
+ * the scale the serializer writes — four decimals for quantities and unit
+ * prices (BT-129, BT-146/147/148), two for every amount, rate and percentage.
+ * Written out field by field rather than by calling the library's own
+ * normalisation, so a change in the serializer's scales shows up here.
+ */
+export function atWireScale(invoice: FacturXInvoice): ParsedInvoice {
+  const two = (v: DecimalInput): string => toFixed(dec(v), 2);
+  const four = (v: DecimalInput): string => toFixed(dec(v), 4);
+  const groups = (list: readonly AllowanceCharge[]): AllowanceCharge<string>[] =>
+    list.map((ac) => {
+      const { basisAmount, percent, ...rest } = ac;
+      return {
+        ...rest,
+        amount: two(ac.amount),
+        vatRate: two(ac.vatRate),
+        ...(basisAmount !== undefined ? { basisAmount: two(basisAmount) } : {}),
+        ...(percent !== undefined ? { percent: two(percent) } : {}),
+      };
+    });
+  const { allowances, charges, ...rest } = invoice;
+  const { lineTotal, allowanceTotal, chargeTotal, prepaid, ...totals } = invoice.totals;
+
+  return {
+    ...rest,
+    ...(allowances !== undefined ? { allowances: groups(allowances) } : {}),
+    ...(charges !== undefined ? { charges: groups(charges) } : {}),
+    lines: invoice.lines.map((line) => {
+      const { grossPrice, priceDiscount, allowances: la, charges: lc, ...l } = line;
+      return {
+        ...l,
+        quantity: four(line.quantity),
+        netPrice: four(line.netPrice),
+        lineTotal: two(line.lineTotal),
+        vatRate: two(line.vatRate),
+        ...(grossPrice !== undefined ? { grossPrice: four(grossPrice) } : {}),
+        ...(priceDiscount !== undefined ? { priceDiscount: four(priceDiscount) } : {}),
+        ...(la !== undefined ? { allowances: groups(la) } : {}),
+        ...(lc !== undefined ? { charges: groups(lc) } : {}),
+      };
+    }),
+    taxBreakdown: invoice.taxBreakdown.map((tb) => ({
+      ...tb,
+      rate: two(tb.rate),
+      basisAmount: two(tb.basisAmount),
+      calculatedAmount: two(tb.calculatedAmount),
+    })),
+    totals: {
+      taxBasisTotal: two(totals.taxBasisTotal),
+      taxTotal: two(totals.taxTotal),
+      grandTotal: two(totals.grandTotal),
+      duePayable: two(totals.duePayable),
+      ...(lineTotal !== undefined ? { lineTotal: two(lineTotal) } : {}),
+      ...(allowanceTotal !== undefined ? { allowanceTotal: two(allowanceTotal) } : {}),
+      ...(chargeTotal !== undefined ? { chargeTotal: two(chargeTotal) } : {}),
+      ...(prepaid !== undefined ? { prepaid: two(prepaid) } : {}),
+    },
   };
 }
 

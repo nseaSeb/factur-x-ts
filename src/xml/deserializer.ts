@@ -3,8 +3,9 @@
 
 import { XMLParser } from 'fast-xml-parser';
 import { hasDoctype, stripBom } from './hygiene.js';
+import { parseDecimal, toText } from '../decimal.js';
 import type {
-  FacturXInvoice,
+  ParsedInvoice,
   TradeParty,
   PostalAddress,
   TradeContact,
@@ -243,7 +244,7 @@ const CURRENCY_CODES: readonly CurrencyCode[] = ['EUR', 'USD', 'GBP'];
 const DOCUMENT_TYPE_CODES: readonly DocumentTypeCode[] = ['380', '381', '386', '500'];
 const VAT_CATEGORY_CODES: readonly VatCategoryCode[] = ['S', 'E', 'Z', 'G', 'O', 'K', 'AE'];
 
-export function deserialize(xml: string): FacturXInvoice {
+export function deserialize(xml: string): ParsedInvoice {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -359,8 +360,8 @@ export function deserialize(xml: string): FacturXInvoice {
  * So: uniform code is lifted and stripped from the entries; divergent codes stay
  * where they are and no document-level field is produced.
  */
-function normalizeVatPointDate(breakdown: TaxBreakdown[]): {
-  readonly entries: TaxBreakdown[];
+function normalizeVatPointDate(breakdown: TaxBreakdown<string>[]): {
+  readonly entries: TaxBreakdown<string>[];
   readonly documentCode: string | undefined;
 } {
   const codes = new Set(breakdown.map((tb) => tb.dueDateTypeCode));
@@ -442,7 +443,7 @@ function parseTradeContact(node: ParsedTradeContact | undefined): TradeContact |
   };
 }
 
-function parseLineItem(node: ParsedLineItem): LineItem {
+function parseLineItem(node: ParsedLineItem): LineItem<string> {
   const id = node.AssociatedDocumentLineDocument?.LineID;
   const name = node.SpecifiedTradeProduct?.Name;
   const netPriceNode = node.SpecifiedLineTradeAgreement?.NetPriceProductTradePrice?.ChargeAmount;
@@ -519,7 +520,7 @@ function isChargeIndicator(node: ParsedAllowanceCharge): boolean {
   return node.ChargeIndicator?.Indicator === 'true';
 }
 
-function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge {
+function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge<string> {
   const category = node.CategoryTradeTax;
   if (node.ActualAmount === undefined) throw new FacturXDeserializeError('Missing ram:ActualAmount in allowance/charge');
   if (!category?.CategoryCode || !category.RateApplicablePercent) {
@@ -540,7 +541,7 @@ function parseAllowanceCharge(node: ParsedAllowanceCharge): AllowanceCharge {
   };
 }
 
-function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown {
+function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown<string> {
   if (!node.CategoryCode || !node.RateApplicablePercent) {
     throw new FacturXDeserializeError('Incomplete header ram:ApplicableTradeTax');
   }
@@ -560,7 +561,7 @@ function parseTaxBreakdown(node: ParsedTradeTax): TaxBreakdown {
   };
 }
 
-function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals {
+function parseMonetaryTotals(node: ParsedMonetarySummation): MonetaryTotals<string> {
   // BT-106 is not in the required set: MINIMUM's summation carries four
   // amounts and no ram:LineTotalAmount, so demanding it here would make every
   // MINIMUM document unreadable. The four below are the ones every profile has.
@@ -646,36 +647,26 @@ function textOf(node: string | TextNode | undefined): string | undefined {
   return node['#text'];
 }
 
-// xsd:decimal's lexical space, and nothing wider: no exponent ("1e400" is
-// Infinity to Number()), no hex ("0x10" is 16), no "Infinity"/"NaN", no
-// thousands or decimal comma. Number() accepts all of those, and every one of
-// them would enter the model as a plausible-looking figure.
-const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
-// No real amount, quantity or rate needs more; a longer string is refused
-// before anything computes with it.
-const MAX_DECIMAL_LENGTH = 32;
-
-function requireNumber(text: string | undefined, field: string): number {
+// Decimals come back as canonical text at the document's own scale ("100.00"
+// stays "100.00"), never as a float: a third-party amount keeps every digit.
+// The lexical check (xsd:decimal only, no exponent, no hex, bounded length)
+// is the same one callers' own values go through (src/decimal.ts).
+function requireNumber(text: string | undefined, field: string): string {
   if (text === undefined) throw new FacturXDeserializeError(`Missing numeric value: ${field}`);
-  const value = decimalValue(text);
-  if (value === undefined) throw new FacturXDeserializeError(`Invalid numeric value for ${field}: "${text}"`);
-  return value;
+  const parsed = parseDecimal(text);
+  if (!parsed.ok) throw new FacturXDeserializeError(`Invalid numeric value for ${field}: "${text}"`);
+  return toText(parsed.value);
 }
 
-function requireAmount(node: AmountNode, field: string): number {
+function requireAmount(node: AmountNode, field: string): string {
   return requireNumber(textOf(node), field);
 }
 
 // Absent is undefined; present but not a decimal is an error, never a silent
-// undefined — an unreadable prepaid amount is not the same as no prepayment.
-function parseOptionalAmount(node: AmountNode, field: string): number | undefined {
+// undefined: an unreadable prepaid amount is not the same as no prepayment.
+function parseOptionalAmount(node: AmountNode, field: string): string | undefined {
   const text = textOf(node);
   return text === undefined ? undefined : requireNumber(text, field);
-}
-
-function decimalValue(text: string): number | undefined {
-  if (text.length > MAX_DECIMAL_LENGTH || !DECIMAL.test(text)) return undefined;
-  return Number(text);
 }
 
 function requireDate(node: ParsedDateTime | undefined, field: string): Date {

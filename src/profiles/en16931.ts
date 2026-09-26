@@ -1,14 +1,15 @@
 // src/profiles/en16931.ts
 // EN 16931 mandatory-field and core business-rule validation.
 
-import type { AllowanceCharge, FacturXInvoice, LineItem, TaxBreakdown, VatCategoryCode } from '../types/invoice.js';
+import type { AllowanceCharge, FacturXInvoice, LineItem, ParsedInvoice, TaxBreakdown, VatCategoryCode } from '../types/invoice.js';
 import type {
   ValidationError,
   ValidationErrorCode,
   ValidationOptions,
   ValidationResult,
 } from '../types/validation.js';
-import { isClose, round2, snapNearZero } from '../amounts.js';
+import { abs, add, cmp, dec, eq, mul, percentOf, round, sign, sub, sum, toFixed, ZERO, type Decimal } from '../decimal.js';
+import { normalizeInvoice } from '../normalize.js';
 import { atLeast, type Profile } from '../types/profiles.js';
 import { validateFrenchBusinessProcess, validateFrenchLegalIds, validateUniformVatPointDate } from './fr.js';
 
@@ -20,7 +21,7 @@ export type { ValidationError, ValidationErrorCode, ValidationOptions, Validatio
 // basisAmount × rate / 100 rounded to 2 decimals. The `1` there is a full
 // currency unit, not a cent — looks like a typo until you check the source,
 // so don't "fix" it to 0.01.
-const VAT_CALCULATION_TOLERANCE = 1;
+const VAT_CALCULATION_TOLERANCE: Decimal = { units: 1n, scale: 0 };
 
 /**
  * BT-8, restricted by EN 16931 (BR-CL-06) to this subset of UNTDID 2475.
@@ -63,7 +64,21 @@ export function validateCodeLists(invoice: FacturXInvoice, options: ValidationOp
   return { valid: errors.length === 0, errors };
 }
 
-export function validateEn16931(invoice: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
+/**
+ * Every amount, quantity and rate is a decimal: finite, well-formed, and — for
+ * a number — free of float drift. Reported as `INVALID_DECIMAL`, one error per
+ * field. The other rules can only run on an invoice that passes this.
+ */
+export function validateDecimals(invoice: FacturXInvoice): ValidationResult {
+  const normalized = normalizeInvoice(invoice);
+  const errors = normalized.ok ? [] : normalized.errors.map((e) => field(e.field, 'INVALID_DECIMAL', e.message));
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateEn16931(source: FacturXInvoice, options: ValidationOptions = {}): ValidationResult {
+  const normalized = normalizeInvoice(source);
+  if (!normalized.ok) return validateDecimals(source);
+  const invoice = normalized.invoice;
   const errors: ValidationError[] = [];
 
   if (invoice.number.trim() === '') {
@@ -148,18 +163,19 @@ function invalidVatPointDate(fieldName: string, code: string): ValidationError {
   );
 }
 
-function validateLine(line: LineItem, index: number, errors: ValidationError[]): void {
+function validateLine(line: LineItem<string>, index: number, errors: ValidationError[]): void {
   const prefix = `lines[${index}]`;
+  const vatRate = dec(line.vatRate);
 
   if (line.name.trim() === '') {
     errors.push(field(`${prefix}.name`, 'EMPTY_VALUE', `Line ${line.id}: item name (BT-153) must not be empty`));
   }
-  if (ZERO_RATE_CATEGORIES.includes(line.vatCategory) && line.vatRate !== 0) {
+  if (ZERO_RATE_CATEGORIES.includes(line.vatCategory) && sign(vatRate) !== 0) {
     errors.push(
       field(`${prefix}.vatRate`, 'INVALID_VAT_RATE', `Line ${line.id}: VAT category ${line.vatCategory} requires a 0% rate (BR-${line.vatCategory}-1)`),
     );
   }
-  if (line.vatCategory === 'S' && line.vatRate <= 0) {
+  if (line.vatCategory === 'S' && sign(vatRate) <= 0) {
     errors.push(field(`${prefix}.vatRate`, 'INVALID_VAT_RATE', `Line ${line.id}: VAT category S (standard rate) requires a rate above 0% (BR-S-1)`));
   }
 
@@ -169,38 +185,38 @@ function validateLine(line: LineItem, index: number, errors: ValidationError[]):
   // BT-131 (lineTotal). EN 16931 doesn't assert this with its own BR number
   // (unlike the header-level sums, BR-CO-10/13/14/15/16), so none is cited.
   //
-  // Unlike those header sums, this one can't use exact (rounded-once)
-  // comparison: netPrice only round-trips through the wire at 2 decimals
-  // (BT-146's own known limitation — see README), so a sub-cent unit price
-  // comes back from deserialize() already rounded, and quantity × netPrice
-  // then drifts from the original lineTotal by up to ~1 cent per unit. A
-  // tolerance scaled to quantity absorbs exactly that rounding, without
-  // masking a genuinely wrong lineTotal.
-  const allowanceSum = (line.allowances ?? []).reduce((sum, ac) => sum + ac.amount, 0);
-  const chargeSum = (line.charges ?? []).reduce((sum, ac) => sum + ac.amount, 0);
-  const expectedLineTotal = line.netPrice * line.quantity - allowanceSum + chargeSum;
-  // Math.abs, not the raw signed quantity: a credit/return line legitimately
-  // carries a negative quantity, and Math.max(1, <negative>) would otherwise
-  // always floor to 1 regardless of the line's real magnitude.
-  const lineTotalTolerance = 0.01 * Math.max(1, Math.abs(line.quantity));
-  if (Math.abs(expectedLineTotal - line.lineTotal) > lineTotalTolerance) {
+  // Unlike those header sums, this one keeps a tolerance of a cent per unit:
+  // a caller may state a net price with more decimals than the wire's four,
+  // or a line total rounded per unit rather than once, and both are
+  // legitimate. The tolerance absorbs that rounding without masking a
+  // genuinely wrong lineTotal.
+  const expectedLineTotal = add(
+    sub(mul(dec(line.netPrice), dec(line.quantity)), sumOf(line.allowances)),
+    sumOf(line.charges),
+  );
+  // abs, not the raw signed quantity: a credit/return line legitimately
+  // carries a negative quantity.
+  const quantity = abs(dec(line.quantity));
+  const lineTotalTolerance = mul(CENT, cmp(quantity, ONE) > 0 ? quantity : ONE);
+  if (cmp(abs(sub(expectedLineTotal, dec(line.lineTotal))), lineTotalTolerance) > 0) {
     errors.push(
       field(
         `${prefix}.lineTotal`,
         'AMOUNT_MISMATCH',
-        `Line ${line.id}: lineTotal (${line.lineTotal.toFixed(2)}) does not equal quantity × net price adjusted by line-level allowances/charges (${expectedLineTotal.toFixed(2)})`,
+        `Line ${line.id}: lineTotal (${toFixed(dec(line.lineTotal), 2)}) does not equal quantity × net price adjusted by line-level allowances/charges (${toFixed(expectedLineTotal, 2)})`,
       ),
     );
   }
 }
 
-function validateTaxBreakdown(tb: TaxBreakdown, index: number, errors: ValidationError[]): void {
+function validateTaxBreakdown(tb: TaxBreakdown<string>, index: number, errors: ValidationError[]): void {
   const prefix = `taxBreakdown[${index}]`;
+  const rate = dec(tb.rate);
 
-  if (ZERO_RATE_CATEGORIES.includes(tb.category) && tb.rate !== 0) {
+  if (ZERO_RATE_CATEGORIES.includes(tb.category) && sign(rate) !== 0) {
     errors.push(field(`${prefix}.rate`, 'INVALID_VAT_RATE', `VAT breakdown category ${tb.category} requires a 0% rate (BR-${tb.category}-1)`));
   }
-  if (tb.category === 'S' && tb.rate <= 0) {
+  if (tb.category === 'S' && sign(rate) <= 0) {
     errors.push(field(`${prefix}.rate`, 'INVALID_VAT_RATE', 'VAT breakdown category S (standard rate) requires a rate above 0% (BR-S-1)'));
   }
   if (EXEMPTION_REQUIRED_CATEGORIES.includes(tb.category) && !tb.exemptionReason && !tb.exemptionReasonCode) {
@@ -213,21 +229,22 @@ function validateTaxBreakdown(tb: TaxBreakdown, index: number, errors: Validatio
     );
   }
 
-  const expectedCalculatedAmount = round2(Math.abs(tb.basisAmount) * (tb.rate / 100));
-  if (Math.abs(Math.abs(tb.calculatedAmount) - expectedCalculatedAmount) > VAT_CALCULATION_TOLERANCE) {
+  const expectedCalculatedAmount = round(percentOf(abs(dec(tb.basisAmount)), rate), 2);
+  if (cmp(abs(sub(abs(dec(tb.calculatedAmount)), expectedCalculatedAmount)), VAT_CALCULATION_TOLERANCE) > 0) {
     errors.push(
       field(
         `${prefix}.calculatedAmount`,
         'AMOUNT_MISMATCH',
-        `VAT breakdown category ${tb.category}: calculatedAmount (${tb.calculatedAmount.toFixed(2)}) does not match basisAmount × rate / 100 (${expectedCalculatedAmount.toFixed(2)}), within a 1-unit tolerance (BR-CO-17)`,
+        `VAT breakdown category ${tb.category}: calculatedAmount (${toFixed(dec(tb.calculatedAmount), 2)}) does not match basisAmount × rate / 100 (${toFixed(expectedCalculatedAmount, 2)}), within a 1-unit tolerance (BR-CO-17)`,
       ),
     );
   }
 }
 
-function validateTaxBreakdownCoversLines(invoice: FacturXInvoice, errors: ValidationError[]): void {
+function validateTaxBreakdownCoversLines(invoice: ParsedInvoice, errors: ValidationError[]): void {
   invoice.lines.forEach((line, index) => {
-    const covered = invoice.taxBreakdown.some((tb) => tb.category === line.vatCategory && tb.rate === line.vatRate);
+    // By value: "20" and "20.00" are the same rate.
+    const covered = invoice.taxBreakdown.some((tb) => tb.category === line.vatCategory && eq(dec(tb.rate), dec(line.vatRate)));
     if (!covered) {
       errors.push(
         field(
@@ -244,8 +261,9 @@ function validateTaxBreakdownCoversLines(invoice: FacturXInvoice, errors: Valida
   }
 }
 
-function validateAmounts(invoice: FacturXInvoice, errors: ValidationError[]): void {
+function validateAmounts(invoice: ParsedInvoice, errors: ValidationError[]): void {
   const { totals } = invoice;
+  const optional = (value: string | undefined): Decimal => (value === undefined ? ZERO : dec(value));
 
   // BT-106 is optional on the model because MINIMUM has no such element; at
   // EN 16931 it is mandatory, and the two sums built on it are skipped rather
@@ -254,15 +272,15 @@ function validateAmounts(invoice: FacturXInvoice, errors: ValidationError[]): vo
   if (lineTotal === undefined) {
     errors.push(field('totals.lineTotal', 'MISSING_FIELD', 'totals.lineTotal (BT-106) is required (BR-CO-10)'));
   } else {
-    const lineTotalSum = invoice.lines.reduce((sum, line) => sum + line.lineTotal, 0);
-    if (!isClose(lineTotalSum, lineTotal)) {
+    const lineTotalSum = sum(invoice.lines.map((line) => dec(line.lineTotal)));
+    if (!sameCents(lineTotalSum, dec(lineTotal))) {
       errors.push(
-        field('totals.lineTotal', 'AMOUNT_MISMATCH', `Sum of line totals (${lineTotalSum.toFixed(2)}) does not match totals.lineTotal (BR-CO-10)`),
+        field('totals.lineTotal', 'AMOUNT_MISMATCH', `Sum of line totals (${toFixed(lineTotalSum, 2)}) does not match totals.lineTotal (BR-CO-10)`),
       );
     }
 
-    const expectedTaxBasisTotal = lineTotal - (totals.allowanceTotal ?? 0) + (totals.chargeTotal ?? 0);
-    if (!isClose(expectedTaxBasisTotal, totals.taxBasisTotal)) {
+    const expectedTaxBasisTotal = add(sub(dec(lineTotal), optional(totals.allowanceTotal)), optional(totals.chargeTotal));
+    if (!sameCents(expectedTaxBasisTotal, dec(totals.taxBasisTotal))) {
       errors.push(field('totals.taxBasisTotal', 'AMOUNT_MISMATCH', 'taxBasisTotal must equal lineTotal - allowanceTotal + chargeTotal (BR-CO-13)'));
     }
   }
@@ -273,41 +291,41 @@ function validateAmounts(invoice: FacturXInvoice, errors: ValidationError[]): vo
   validateAllowanceChargeTotal(invoice.allowances, totals.allowanceTotal, 'allowance', 'BR-CO-11', errors);
   validateAllowanceChargeTotal(invoice.charges, totals.chargeTotal, 'charge', 'BR-CO-12', errors);
 
-  const taxBreakdownSum = invoice.taxBreakdown.reduce((sum, tb) => sum + tb.calculatedAmount, 0);
-  if (!isClose(taxBreakdownSum, totals.taxTotal)) {
+  const taxBreakdownSum = sum(invoice.taxBreakdown.map((tb) => dec(tb.calculatedAmount)));
+  if (!sameCents(taxBreakdownSum, dec(totals.taxTotal))) {
     errors.push(
-      field('totals.taxTotal', 'AMOUNT_MISMATCH', `Sum of VAT breakdown amounts (${taxBreakdownSum.toFixed(2)}) does not match totals.taxTotal (BR-CO-14)`),
+      field('totals.taxTotal', 'AMOUNT_MISMATCH', `Sum of VAT breakdown amounts (${toFixed(taxBreakdownSum, 2)}) does not match totals.taxTotal (BR-CO-14)`),
     );
   }
 
-  const expectedGrandTotal = totals.taxBasisTotal + totals.taxTotal;
-  if (!isClose(expectedGrandTotal, totals.grandTotal)) {
+  const expectedGrandTotal = add(dec(totals.taxBasisTotal), dec(totals.taxTotal));
+  if (!sameCents(expectedGrandTotal, dec(totals.grandTotal))) {
     errors.push(field('totals.grandTotal', 'AMOUNT_MISMATCH', 'grandTotal must equal taxBasisTotal + taxTotal (BR-CO-15)'));
   }
 
-  const expectedDuePayable = totals.grandTotal - (totals.prepaid ?? 0);
-  if (!isClose(expectedDuePayable, totals.duePayable)) {
+  const expectedDuePayable = sub(dec(totals.grandTotal), optional(totals.prepaid));
+  if (!sameCents(expectedDuePayable, dec(totals.duePayable))) {
     errors.push(field('totals.duePayable', 'AMOUNT_MISMATCH', 'duePayable must equal grandTotal - prepaid (BR-CO-16)'));
   }
 }
 
 function validateAllowanceChargeTotal(
-  groups: readonly AllowanceCharge[] | undefined,
-  declaredTotal: number | undefined,
+  groups: readonly AllowanceCharge<string>[] | undefined,
+  declaredTotal: string | undefined,
   kind: 'allowance' | 'charge',
   rule: string,
   errors: ValidationError[],
 ): void {
-  const groupSum = (groups ?? []).reduce((sum, ac) => sum + ac.amount, 0);
-  const total = declaredTotal ?? 0;
+  const groupSum = sumOf(groups);
+  const total = declaredTotal === undefined ? ZERO : dec(declaredTotal);
 
-  if (isClose(groupSum, total)) return;
+  if (sameCents(groupSum, total)) return;
 
   const fieldName = `totals.${kind}Total`;
   const message =
-    groupSum === 0
-      ? `totals.${kind}Total is ${total.toFixed(2)} but the invoice declares no document-level ${kind}s (${rule})`
-      : `Sum of document-level ${kind}s (${groupSum.toFixed(2)}) does not match totals.${kind}Total (${rule})`;
+    (groups ?? []).length === 0
+      ? `totals.${kind}Total is ${toFixed(total, 2)} but the invoice declares no document-level ${kind}s (${rule})`
+      : `Sum of document-level ${kind}s (${toFixed(groupSum, 2)}) does not match totals.${kind}Total (${rule})`;
 
   errors.push(field(fieldName, 'AMOUNT_MISMATCH', message));
 }
@@ -315,12 +333,10 @@ function validateAllowanceChargeTotal(
 // BR-CO-25 (asserted by the EXTENDED Schematron; EN 16931's doesn't carry it,
 // but the underlying CII field and rounded-total semantics are shared, so
 // checking it universally here is still correct — never a false positive).
-function validatePaymentTerms(invoice: FacturXInvoice, errors: ValidationError[]): void {
-  // snapNearZero, not a raw <= 0: duePayable is often itself a subtraction
-  // (grandTotal - prepaid) and can land on a tiny positive float instead of
-  // exact 0 — that must count as "not positive" here the same way isClose
-  // treats it as zero elsewhere, or the two disagree on the same invoice.
-  if (snapNearZero(invoice.totals.duePayable) <= 0) return;
+function validatePaymentTerms(invoice: ParsedInvoice, errors: ValidationError[]): void {
+  // Exact decimals: a zero due amount is exactly zero, with no float residue
+  // to snap away first.
+  if (sign(dec(invoice.totals.duePayable)) <= 0) return;
   // Truthy, not just !== undefined: buildPaymentTerms only emits ram:Description
   // for a non-empty string, so an empty paymentTerms would pass here but leave
   // the wire XML without a ram:Description for BR-CO-25's own XPath to find.
@@ -333,6 +349,18 @@ function validatePaymentTerms(invoice: FacturXInvoice, errors: ValidationError[]
       'duePayable is positive: paymentDueDate (BT-9) or paymentTerms (BT-20) is required (BR-CO-25)',
     ),
   );
+}
+
+const CENT: Decimal = { units: 1n, scale: 2 };
+const ONE: Decimal = { units: 1n, scale: 0 };
+
+/** Equality as the Schematron sees it: both sides rounded to cents, then compared exactly. */
+function sameCents(a: Decimal, b: Decimal): boolean {
+  return eq(round(a, 2), round(b, 2));
+}
+
+function sumOf(groups: readonly { readonly amount: string }[] | undefined): Decimal {
+  return sum((groups ?? []).map((g) => dec(g.amount)));
 }
 
 function field(fieldName: string, code: ValidationErrorCode, message: string): ValidationError {

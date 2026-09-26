@@ -29,6 +29,7 @@ import { buildXmpMetadata } from './metadata.js';
 import { isFacturXFilespec } from './filespec.js';
 import {
   validateCodeLists,
+  validateDecimals,
   validateEn16931,
   validateProfileStructure,
   type ValidationError,
@@ -135,6 +136,7 @@ function payloadFromInvoice(options: GenerateFromInvoiceOptions): Payload {
     profile === 'EN 16931'
       ? validateEn16931(invoice, validationOptions).errors
       : [
+          ...validateDecimals(invoice).errors,
           ...validateCodeLists(invoice, validationOptions).errors,
           ...validateProfileStructure(invoice, profile).errors,
         ];

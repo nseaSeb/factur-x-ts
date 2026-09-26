@@ -1,7 +1,7 @@
 // src/types/totals.ts
 // Input and result shapes for the document arithmetic (`computeTotals`).
 
-import type { FacturXInvoice, LineItem, MonetaryTotals, TaxBreakdown } from './invoice.js';
+import type { DecimalInput, FacturXInvoice, LineItem, MonetaryTotals, ParsedInvoice, TaxBreakdown } from './invoice.js';
 
 /**
  * A line whose BT-131 has not been worked out yet.
@@ -10,7 +10,7 @@ import type { FacturXInvoice, LineItem, MonetaryTotals, TaxBreakdown } from './i
  * figure and reported as a divergence rather than silently kept.
  */
 export interface DraftLineItem extends Omit<LineItem, 'lineTotal'> {
-  readonly lineTotal?: number;
+  readonly lineTotal?: DecimalInput;
 }
 
 /**
@@ -23,8 +23,8 @@ export interface DraftLineItem extends Omit<LineItem, 'lineTotal'> {
  */
 export interface DraftTaxBreakdown extends Omit<TaxBreakdown, 'type' | 'basisAmount' | 'calculatedAmount'> {
   readonly type?: 'VAT';
-  readonly basisAmount?: number;
-  readonly calculatedAmount?: number;
+  readonly basisAmount?: DecimalInput;
+  readonly calculatedAmount?: DecimalInput;
 }
 
 /** An invoice with the arithmetic left out — the input of `computeTotals`. */
@@ -41,8 +41,12 @@ export type TotalsErrorCode =
   | 'ORPHAN_TAX_BREAKDOWN'
   /** Two supplied breakdown entries share a category and rate: one would silently win. */
   | 'DUPLICATE_TAX_BREAKDOWN'
-  /** NaN or Infinity reached an amount. Adding those propagates instead of failing. */
-  | 'NOT_A_FINITE_AMOUNT'
+  /**
+   * An amount, quantity or rate that is not a decimal: NaN, Infinity, a
+   * malformed string, or a number carrying float-arithmetic drift
+   * (`0.1 + 0.2`). See `normalizeInvoice`.
+   */
+  | 'INVALID_DECIMAL'
   /** A figure the caller stated disagrees with the derived one. */
   | 'TOTALS_MISMATCH';
 
@@ -52,13 +56,13 @@ export interface TotalsError {
   readonly field: string;
   readonly message: string;
   /** Present on `TOTALS_MISMATCH` only: what the caller stated. */
-  readonly given?: number;
+  readonly given?: string;
   /** Present on `TOTALS_MISMATCH` only: what the arithmetic gives. */
-  readonly computed?: number;
+  readonly computed?: string;
 }
 
 export type TotalsResult =
-  | { readonly ok: true; readonly invoice: FacturXInvoice }
+  | { readonly ok: true; readonly invoice: ParsedInvoice }
   | { readonly ok: false; readonly errors: readonly TotalsError[] };
 
 export interface TotalsOptions {

@@ -66,10 +66,10 @@ describe('generate -> parse round-trip', () => {
     expect(result.invoice.taxDueDateTypeCode).toBeUndefined();
     // The four amounts MINIMUM does keep.
     expect(result.invoice.totals).toEqual({
-      taxBasisTotal: 195,
-      taxTotal: 39,
-      grandTotal: 234,
-      duePayable: 234,
+      taxBasisTotal: '195.00',
+      taxTotal: '39.00',
+      grandTotal: '234.00',
+      duePayable: '234.00',
     });
     expect(result.invoice.seller.name).toBe('Ma Société SARL');
     // BG-5 belongs to the seller alone in MINIMUM: the buyer has no address at

@@ -45,7 +45,9 @@ export type {
   SchematronValidationResult,
   SchematronValidationOptions,
 } from './types/index.js';
-export { validateEn16931, VAT_POINT_DATE_CODES } from './profiles/en16931.js';
+export { validateEn16931, validateDecimals, VAT_POINT_DATE_CODES } from './profiles/en16931.js';
+export { normalizeInvoice, type NormalizeResult, type DecimalError } from './normalize.js';
+export type { DecimalRefusal } from './decimal.js';
 export { computeTotals } from './totals.js';
 export { BUSINESS_PROCESS_CODES } from './profiles/fr.js';
 export { validateXsd, FacturXXsdNotBundledError } from './validate/xsd.js';

@@ -352,7 +352,7 @@ describe('validateEn16931', () => {
       };
 
       const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
-      expect(roundTripped.lines[0]!.netPrice).toBe(10.0006); // rounded to 4 decimals, not truncated to 2
+      expect(roundTripped.lines[0]!.netPrice).toBe('10.0006'); // rounded to 4 decimals, not truncated to 2
 
       const result = validateEn16931(roundTripped);
       expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
@@ -373,7 +373,7 @@ describe('validateEn16931', () => {
       };
 
       const roundTripped = deserialize(serialize(invoice, 'EN 16931'));
-      expect(roundTripped.lines[0]!.netPrice).toBe(10.0006); // confirms the (now much smaller) drift is really there
+      expect(roundTripped.lines[0]!.netPrice).toBe('10.0006'); // confirms the (now much smaller) drift is really there
 
       const result = validateEn16931(roundTripped);
       expect(result.errors.some((e) => e.field === 'lines[0].lineTotal')).toBe(false);
@@ -399,31 +399,38 @@ describe('validateEn16931', () => {
     expect(result.errors.some((e) => e.field === 'totals.lineTotal')).toBe(false);
   });
 
-  it('does not misreport a mismatch when a subtraction chain lands on negative-epsilon instead of exact zero', () => {
-    // lineTotal - allowanceTotal + chargeTotal = 0.02 - 0.05 + 0.03, which is
-    // mathematically exactly 0 but evaluates to -3.469e-18 in IEEE 754 float.
-    // (-3.469e-18).toFixed(2) is the string "-0.00", not "0.00" — even though
-    // (-0).toFixed(2) IS "0.00" — so a naive toFixed comparison against an
-    // exact 0 would report a false AMOUNT_MISMATCH on taxBasisTotal (BR-CO-13).
+  it('refuses a float that drifted off zero, and accepts the same chain stated exactly', () => {
+    // 0.02 - 0.05 + 0.03 is exactly 0, but evaluates to -3.469e-18 in IEEE 754.
+    // That value is not an amount anyone stated: it is float arithmetic, and it
+    // is refused as such rather than rounded into a plausible "0.00".
     const base = sampleInvoice();
+    const chain = 0.02 - 0.05 + 0.03;
     const invoice = {
       ...base,
       lines: [{ ...base.lines[0]!, netPrice: 0.02, quantity: 1, lineTotal: 0.02 }],
-      allowances: [{ amount: 0.05, vatCategory: 'S' as const, vatRate: 20 }],
-      charges: [{ amount: 0.03, vatCategory: 'S' as const, vatRate: 20 }],
+      allowances: [{ amount: 0.05, reason: 'Remise', vatCategory: 'S' as const, vatRate: 20 }],
+      charges: [{ amount: 0.03, reason: 'Port', vatCategory: 'S' as const, vatRate: 20 }],
       taxBreakdown: [{ type: 'VAT' as const, category: 'S' as const, rate: 20, basisAmount: 0, calculatedAmount: 0 }],
       totals: {
         lineTotal: 0.02,
         allowanceTotal: 0.05,
         chargeTotal: 0.03,
-        taxBasisTotal: 0.02 - 0.05 + 0.03,
+        taxBasisTotal: chain,
         taxTotal: 0,
-        grandTotal: 0.02 - 0.05 + 0.03,
-        duePayable: 0.02 - 0.05 + 0.03,
+        grandTotal: chain,
+        duePayable: chain,
       },
     };
 
-    const result = validateEn16931(invoice);
-    expect(result.errors.some((e) => e.field === 'totals.taxBasisTotal')).toBe(false);
+    const drifted = validateEn16931(invoice);
+    expect(drifted.errors.map((e) => [e.field, e.code])).toEqual([
+      ['totals.taxBasisTotal', 'INVALID_DECIMAL'],
+      ['totals.grandTotal', 'INVALID_DECIMAL'],
+      ['totals.duePayable', 'INVALID_DECIMAL'],
+    ]);
+
+    const exact = validateEn16931({ ...invoice, totals: { ...invoice.totals, taxBasisTotal: 0, grandTotal: '0.00', duePayable: '0' } });
+    expect(exact.errors.some((e) => e.field.startsWith('totals.'))).toBe(false);
   });
+
 });

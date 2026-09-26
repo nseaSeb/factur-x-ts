@@ -1,7 +1,20 @@
 // src/types/invoice.ts
 // Invoicing model Factur-X EN 16931.
 
-export interface FacturXInvoice {
+import type { DecimalInput } from '../decimal.js';
+
+export type { DecimalInput } from '../decimal.js';
+
+/**
+ * An invoice.
+ *
+ * Every amount, quantity and rate is a `D`: what you pass in may be a number
+ * or a decimal string (`FacturXInvoice`, the default), and what the library
+ * hands back — from `parse`, `deserialize`, `computeTotals` — is always a
+ * canonical decimal string (`ParsedInvoice`), so no figure read from a
+ * third-party document loses a digit to a float.
+ */
+export interface FacturXInvoice<D extends DecimalInput = DecimalInput> {
   readonly number: string;
   readonly issueDate: Date;
   readonly currency: CurrencyCode;
@@ -12,18 +25,18 @@ export interface FacturXInvoice {
   /** BG-11 — représentant fiscal du vendeur. Seul son `vatId` (BT-63) est réglementaire. */
   readonly taxRepresentative?: TradeParty;
 
-  readonly lines: LineItem[];
-  readonly taxBreakdown: TaxBreakdown[];
-  readonly totals: MonetaryTotals;
+  readonly lines: readonly LineItem<D>[];
+  readonly taxBreakdown: readonly TaxBreakdown<D>[];
+  readonly totals: MonetaryTotals<D>;
 
   /**
    * Document-level allowances (BG-20). Their sum is BT-107
    * (`totals.allowanceTotal`). Distinct from `LineItem.allowances` (BG-27),
    * which are already folded into the line's own `lineTotal`.
    */
-  readonly allowances?: AllowanceCharge[];
+  readonly allowances?: readonly AllowanceCharge<D>[];
   /** Document-level charges (BG-21). Their sum is BT-108 (`totals.chargeTotal`). */
-  readonly charges?: AllowanceCharge[];
+  readonly charges?: readonly AllowanceCharge<D>[];
 
   readonly notes?: Note[];
   readonly billingPeriod?: BillingPeriod;
@@ -45,6 +58,9 @@ export interface FacturXInvoice {
    */
   readonly paymentTerms?: string;
 }
+
+/** What every reader returns: amounts, quantities and rates as canonical decimal strings. */
+export type ParsedInvoice = FacturXInvoice<string>;
 
 // ---- Types auxiliaires ----
 
@@ -111,20 +127,20 @@ export interface TradeContact {
   readonly email?: string;
 }
 
-export interface LineItem {
+export interface LineItem<D extends DecimalInput = DecimalInput> {
   readonly id: string;
   readonly name: string;
   readonly description?: string;
-  readonly quantity: number;
+  readonly quantity: D;
   readonly unit: string; // UN/ECE Rec 20, ex: 'C62' (unité), 'H87' (pièce)
-  readonly netPrice: number;
-  readonly grossPrice?: number;
-  readonly priceDiscount?: number;
-  readonly lineTotal: number;
+  readonly netPrice: D;
+  readonly grossPrice?: D;
+  readonly priceDiscount?: D;
+  readonly lineTotal: D;
   readonly vatCategory: VatCategoryCode;
-  readonly vatRate: number;
-  readonly allowances?: AllowanceCharge[];
-  readonly charges?: AllowanceCharge[];
+  readonly vatRate: D;
+  readonly allowances?: readonly AllowanceCharge<D>[];
+  readonly charges?: readonly AllowanceCharge<D>[];
 
   /**
    * French EXTENDED extensions (EXT-FR-FE-*), not EN 16931 business terms —
@@ -144,28 +160,28 @@ export interface LineItem {
 
 export type VatCategoryCode = 'S' | 'E' | 'Z' | 'G' | 'O' | 'K' | 'AE';
 
-export interface AllowanceCharge {
-  readonly amount: number;
+export interface AllowanceCharge<D extends DecimalInput = DecimalInput> {
+  readonly amount: D;
   readonly reason?: string;
   readonly reasonCode?: string;
-  readonly basisAmount?: number;
-  readonly percent?: number;
+  readonly basisAmount?: D;
+  readonly percent?: D;
   readonly vatCategory: VatCategoryCode;
-  readonly vatRate: number;
+  readonly vatRate: D;
 }
 
-export interface TaxBreakdown {
+export interface TaxBreakdown<D extends DecimalInput = DecimalInput> {
   readonly type: 'VAT';
   readonly category: VatCategoryCode;
-  readonly rate: number;
-  readonly basisAmount: number;
-  readonly calculatedAmount: number;
+  readonly rate: D;
+  readonly basisAmount: D;
+  readonly calculatedAmount: D;
   readonly exemptionReason?: string;
   readonly exemptionReasonCode?: string;
   readonly dueDateTypeCode?: string;
 }
 
-export interface MonetaryTotals {
+export interface MonetaryTotals<D extends DecimalInput = DecimalInput> {
   /**
    * BT-106 — sum of the line net amounts.
    *
@@ -174,14 +190,14 @@ export interface MonetaryTotals {
    * a missing one. Mandatory at EN 16931 (BR-CO-10), where `validateEn16931`
    * requires it.
    */
-  readonly lineTotal?: number;
-  readonly allowanceTotal?: number;
-  readonly chargeTotal?: number;
-  readonly taxBasisTotal: number;
-  readonly taxTotal: number;
-  readonly grandTotal: number;
-  readonly prepaid?: number;
-  readonly duePayable: number;
+  readonly lineTotal?: D;
+  readonly allowanceTotal?: D;
+  readonly chargeTotal?: D;
+  readonly taxBasisTotal: D;
+  readonly taxTotal: D;
+  readonly grandTotal: D;
+  readonly prepaid?: D;
+  readonly duePayable: D;
 }
 
 export interface Note {
