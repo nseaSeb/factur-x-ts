@@ -3,7 +3,6 @@
 
 import type {
   FacturXInvoice,
-  TradeParty,
   LineItem,
   AllowanceCharge,
   TaxBreakdown,
@@ -11,6 +10,7 @@ import type {
   PrecedingInvoice,
   Note,
   BillingPeriod,
+  DeliveryParty,
 } from '../types/invoice.js';
 import type { ParsedInvoice } from '../types/invoice.js';
 import type { Profile } from '../types/profiles.js';
@@ -125,7 +125,7 @@ function buildApplicableHeaderTradeDelivery(invoice: ParsedInvoice, profile: Pro
   const shipTo = invoice.shipTo
     ? buildTradeParty(
         {
-          name: invoice.shipTo.name,
+          ...(invoice.shipTo.name !== undefined ? { name: invoice.shipTo.name } : {}),
           ...(invoice.shipTo.globalId !== undefined ? { globalId: invoice.shipTo.globalId } : {}),
           ...(invoice.shipTo.globalScheme !== undefined ? { globalScheme: invoice.shipTo.globalScheme } : {}),
           ...(invoice.shipTo.address !== undefined ? { address: invoice.shipTo.address } : {}),
@@ -285,7 +285,9 @@ const SELLER_GLOBAL_ID_SCHEME = '0231';
 // — it types every party alike — so only the Schematron catches it, which is
 // why a realistic invoice has to go in front of it before a profile is called
 // done.
-function buildTradeParty(party: TradeParty, tag: string, profile: Profile, defaultGlobalScheme?: string): string {
+// DeliveryParty: a ship-to may be unnamed (BT-70 is optional); seller and
+// buyer are typed TradeParty, which requires the name.
+function buildTradeParty(party: DeliveryParty, tag: string, profile: Profile, defaultGlobalScheme?: string): string {
   const wl = atLeast(profile, 'BASIC WL');
   const addressable = wl || tag === 'ram:SellerTradeParty';
 
@@ -336,7 +338,7 @@ function buildTradeParty(party: TradeParty, tag: string, profile: Profile, defau
         `</ram:SpecifiedLegalOrganization>`
       : '';
 
-  return `<${tag}>${globalId}${el('ram:Name', party.name)}${legalOrganization}${contact}${postalAddress}${taxRegistration}</${tag}>`;
+  return `<${tag}>${globalId}${party.name !== undefined ? el('ram:Name', party.name) : ''}${legalOrganization}${contact}${postalAddress}${taxRegistration}</${tag}>`;
 }
 
 // ---- ApplicableHeaderTradeSettlement ----
@@ -528,7 +530,7 @@ function buildMonetarySummation(
     // (to disambiguate a VAT total expressed in a second, accounting
     // currency — BT-111); everywhere else it's a violation ("attribute not
     // used in the given context").
-    elAmountWithCurrency('ram:TaxTotalAmount', totals.taxTotal, currency) +
+    (totals.taxTotal !== undefined ? elAmountWithCurrency('ram:TaxTotalAmount', totals.taxTotal, currency) : '') +
     taxTotalInTaxCurrency +
     rounding +
     elAmount('ram:GrandTotalAmount', totals.grandTotal) +

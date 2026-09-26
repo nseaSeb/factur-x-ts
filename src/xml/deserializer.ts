@@ -17,6 +17,7 @@ import type {
   BillingPeriod,
   PaymentMean,
   PrecedingInvoice,
+  DeliveryParty,
   CurrencyCode,
   DocumentTypeCode,
   VatCategoryCode,
@@ -315,11 +316,15 @@ export function deserialize(xml: string): ParsedInvoice {
     (settlement.ApplicableTradeTax ?? []).map(parseTaxBreakdown),
   );
   const currency = asCurrencyCode(settlement.InvoiceCurrencyCode);
-  const taxCurrency = settlement.TaxCurrencyCode;
-  if (taxCurrency !== undefined) asCurrencyCode(taxCurrency);
+  // A tax currency equal to the invoice currency says nothing — some producers
+  // write it on every invoice — and kept, it would make the parsed invoice fail
+  // BR-53 and the BT-6 ≠ BT-5 check on its way back through generate.
+  const declaredTaxCurrency = settlement.TaxCurrencyCode;
+  if (declaredTaxCurrency !== undefined) asCurrencyCode(declaredTaxCurrency);
+  const taxCurrency = declaredTaxCurrency === currency ? undefined : declaredTaxCurrency;
   const totals = parseMonetaryTotals(settlement.SpecifiedTradeSettlementHeaderMonetarySummation, currency, taxCurrency);
   const delivery = typeof transaction.ApplicableHeaderTradeDelivery === 'object' ? transaction.ApplicableHeaderTradeDelivery : undefined;
-  const shipTo = delivery?.ShipToTradeParty ? parseTradeParty(delivery.ShipToTradeParty) : undefined;
+  const shipTo = delivery?.ShipToTradeParty ? parseDeliveryParty(delivery.ShipToTradeParty) : undefined;
   const deliveryDateText = textOf(delivery?.ActualDeliverySupplyChainEvent?.OccurrenceDateTime?.DateTimeString);
   const paymentMeans = (settlement.SpecifiedTradeSettlementPaymentMeans ?? []).map(parsePaymentMeans);
   const precedingInvoices = (settlement.InvoiceReferencedDocument ?? []).map(parsePrecedingInvoice);
@@ -402,8 +407,20 @@ function normalizeVatPointDate(breakdown: TaxBreakdown<string>[]): {
 
 // ---- Section parsers ----
 
+// BT-70 is optional on a delivery location, where the schema allows an
+// address-only party; seller and buyer must be named.
+function parseDeliveryParty(node: ParsedTradeParty): DeliveryParty {
+  const { name, ...rest } = parseParty(node);
+  return name === undefined ? rest : { name, ...rest };
+}
+
 function parseTradeParty(node: ParsedTradeParty): TradeParty {
-  if (!node.Name) throw new FacturXDeserializeError('Missing ram:Name in trade party');
+  const party = parseParty(node);
+  if (party.name === undefined) throw new FacturXDeserializeError('Missing ram:Name in trade party');
+  return { ...party, name: party.name };
+}
+
+function parseParty(node: ParsedTradeParty): DeliveryParty {
   const address = node.PostalTradeAddress;
   // A party with no ram:PostalTradeAddress at all is legitimate: MINIMUM gives
   // one to the seller and to nobody else. One that *has* the element must
@@ -436,7 +453,7 @@ function parseTradeParty(node: ParsedTradeParty): TradeParty {
   const legalScheme = schemeOf(node.SpecifiedLegalOrganization?.ID);
 
   return {
-    name: node.Name,
+    ...(node.Name ? { name: node.Name } : {}),
     ...(vatId ? { vatId } : {}),
     ...(legalId ? { legalId } : {}),
     // The scheme comes back as written, not as supplied: the serializer applies
@@ -511,7 +528,7 @@ function parseLineItem(node: ParsedLineItem): LineItem<string> {
   // serialize() gates emission by profile.
   const notes = (node.AssociatedDocumentLineDocument.IncludedNote ?? []).map(parseNote);
   const delivery = node.SpecifiedLineTradeDelivery;
-  const shipTo = delivery?.ShipToTradeParty ? parseTradeParty(delivery.ShipToTradeParty) : undefined;
+  const shipTo = delivery?.ShipToTradeParty ? parseDeliveryParty(delivery.ShipToTradeParty) : undefined;
   const deliveryDate = delivery?.ActualDeliverySupplyChainEvent
     ? requireDate(
         delivery.ActualDeliverySupplyChainEvent.OccurrenceDateTime,
@@ -607,9 +624,9 @@ function parseMonetaryTotals(
   // BT-106 is not in the required set: MINIMUM's summation carries four
   // amounts and no ram:LineTotalAmount, so demanding it here would make every
   // MINIMUM document unreadable. The four below are the ones every profile has.
+  // BT-110 is minOccurs="0" in every schema, MINIMUM included.
   if (
     node.TaxBasisTotalAmount === undefined ||
-    taxTotalNode === undefined ||
     node.GrandTotalAmount === undefined ||
     node.DuePayableAmount === undefined
   ) {
@@ -629,7 +646,7 @@ function parseMonetaryTotals(
     ...(allowanceTotal !== undefined ? { allowanceTotal } : {}),
     ...(chargeTotal !== undefined ? { chargeTotal } : {}),
     taxBasisTotal: requireAmount(node.TaxBasisTotalAmount, 'TaxBasisTotalAmount'),
-    taxTotal: requireAmount(taxTotalNode, 'TaxTotalAmount'),
+    ...(taxTotalNode !== undefined ? { taxTotal: requireAmount(taxTotalNode, 'TaxTotalAmount') } : {}),
     ...(taxTotalInTaxCurrency !== undefined ? { taxTotalInTaxCurrency } : {}),
     ...(rounding !== undefined ? { rounding } : {}),
     grandTotal: requireAmount(node.GrandTotalAmount, 'GrandTotalAmount'),

@@ -203,3 +203,40 @@ describe('the new fields against the official rule sets', () => {
     await expect(generate({ invoice: zero, profile: 'BASIC' })).resolves.toBeInstanceOf(Uint8Array);
   });
 });
+
+// Found by /code-review: each of these is a valid document the deserializer
+// refused, or read back into an invoice generate then refused.
+describe('documents the schemas allow and the deserializer used to refuse', () => {
+  it('reads a ship-to with no name, and writes it back without one', () => {
+    const base = sampleInvoice();
+    const xml = serialize({ ...base, shipTo: { address: { country: 'FR' } } }, 'EN 16931');
+    expect(xml).toContain('<ram:ShipToTradeParty><ram:PostalTradeAddress><ram:CountryID>FR</ram:CountryID>');
+    const parsed = deserialize(xml);
+    expect(parsed.shipTo).toEqual({ address: { country: 'FR' } });
+    expect(serialize(parsed, 'EN 16931')).toBe(xml);
+  });
+
+  it('reads a summation with no BT-110, and validates it as stating no VAT', () => {
+    const base = sampleInvoice();
+    const xml = serialize(base, 'MINIMUM').replace(/<ram:TaxTotalAmount[^>]*>[^<]*<\/ram:TaxTotalAmount>/, '');
+    expect(xml).not.toContain('TaxTotalAmount');
+    expect(deserialize(xml).totals.taxTotal).toBeUndefined();
+
+    const { taxTotal: _t, ...noVatTotal } = base.totals;
+    const errors = validateEn16931({ ...base, totals: noVatTotal }).errors.map((e) => e.field);
+    // The breakdown still carries VAT, so BR-CO-14 and BR-CO-15 disagree.
+    expect(errors).toEqual(['totals.taxTotal', 'totals.grandTotal']);
+  });
+
+  it('drops a tax currency equal to the invoice currency, so the invoice regenerates', async () => {
+    const base = sampleInvoice();
+    const xml = serialize(base, 'EN 16931').replace(
+      '<ram:InvoiceCurrencyCode>',
+      '<ram:TaxCurrencyCode>EUR</ram:TaxCurrencyCode><ram:InvoiceCurrencyCode>',
+    );
+    const parsed = deserialize(xml);
+    expect(parsed.taxCurrency).toBeUndefined();
+    expect(parsed.totals.taxTotal).toBe('39.00');
+    await expect(generate({ invoice: parsed, profile: 'EN 16931' })).resolves.toBeInstanceOf(Uint8Array);
+  });
+});

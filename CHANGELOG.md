@@ -33,6 +33,9 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - An optional amount that is present but unreadable is an error, no longer silently dropped.
 - `serialize` with an unknown profile throws `FacturXSerializeError`, not a `TypeError`.
 - VAT grouping and BR-CO-18 compare rates by value: `'20'` and `'20.00'` are one rate.
+- A ship-to with no name (BT-70 is optional) is read, not refused; `shipTo` is typed `DeliveryParty`, whose `name` is optional.
+- `totals.taxTotal` (BT-110) is optional, as in every schema: a summation without it is read, and counts as zero in BR-CO-14 and BR-CO-15.
+- A tax currency equal to the invoice currency is dropped on read, so such a document regenerates instead of failing BR-53.
 
 ## [0.2.0] - 2026-08-19
 

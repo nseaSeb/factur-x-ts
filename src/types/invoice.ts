@@ -53,7 +53,7 @@ export interface FacturXInvoice<D extends DecimalInput = DecimalInput> {
    * buyer's address: BT-70 (`name`), BT-71 (`globalId`) and BG-15
    * (`address`). BASIC WL and above.
    */
-  readonly shipTo?: TradeParty;
+  readonly shipTo?: DeliveryParty;
   /** BT-72 — the actual delivery date. BASIC WL and above. */
   readonly deliveryDate?: Date;
   readonly paymentMeans?: PaymentMean[];
@@ -144,6 +144,13 @@ export interface TradeParty {
   readonly contact?: TradeContact;
 }
 
+/**
+ * A delivery location (BG-13, and EXT-FR-FE-BG-10 on a line). Unlike the
+ * seller and the buyer, its name (BT-70) is optional: the schemas from BASIC
+ * WL up allow an address-only ship-to.
+ */
+export type DeliveryParty = Omit<TradeParty, 'name'> & { readonly name?: string };
+
 export interface PostalAddress {
   // Only country is mandatory in the CII schema (ram:TradeAddressType has
   // no minOccurs on CountryID, minOccurs="0" on everything else) and in
@@ -193,7 +200,7 @@ export interface LineItem<D extends DecimalInput = DecimalInput> {
    */
   readonly notes?: Note[];
   /** EXT-FR-FE-BG-10 — delivery address specific to this line. EXTENDED only. */
-  readonly shipTo?: TradeParty;
+  readonly shipTo?: DeliveryParty;
   /** EXT-FR-FE-BG-11 — delivery date specific to this line. EXTENDED only. */
   readonly deliveryDate?: Date;
   /**
@@ -246,7 +253,11 @@ export interface MonetaryTotals<D extends DecimalInput = DecimalInput> {
   readonly allowanceTotal?: D;
   readonly chargeTotal?: D;
   readonly taxBasisTotal: D;
-  readonly taxTotal: D;
+  /**
+   * BT-110 — optional in every schema, MINIMUM included; absent counts as zero
+   * in BR-CO-14 and BR-CO-15. `computeTotals` always derives it.
+   */
+  readonly taxTotal?: D;
   /**
    * BT-111 — the VAT total restated in `taxCurrency`. Required when
    * `taxCurrency` is set (BR-53), never derived: it needs an exchange rate
