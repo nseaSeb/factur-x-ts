@@ -97,13 +97,13 @@ describe('normalizeInvoice', () => {
     expect(result.errors[1]!.message).toContain('pass the amount as a string');
   });
 
-  it('accepts numbers and strings alike, and hands back canonical strings', () => {
+  it('accepts numbers and strings alike, and hands back money at two decimals', () => {
     const base = sampleInvoice();
     const result = normalizeInvoice({ ...base, totals: { ...base.totals, grandTotal: '234.00', duePayable: 234 } });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.invoice.totals.grandTotal).toBe('234.00');
-    expect(result.invoice.totals.duePayable).toBe('234');
+    expect(result.invoice.totals.duePayable).toBe('234.00');
   });
 
   it('does not add keys the source did not have', () => {

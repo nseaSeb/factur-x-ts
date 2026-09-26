@@ -30,5 +30,5 @@ The Elixir sibling (`nseaSeb/facturx`, ADR 0001 there) uses `Decimal` throughout
 ## Consequences
 
 - Breaking in 0.3.0: readers return strings, `TotalsError.given` / `computed` are strings, the `NOT_A_FINITE_AMOUNT` code became `INVALID_DECIMAL`, and model arrays are `readonly`.
-- A caller-supplied amount with more than two decimals is still rounded to two on the wire, now exactly. Refusing it instead would be a separate decision.
+- A money amount with more than two decimals is rounded to the cent when normalized, before any sum. Rounding it only on the wire, as first written, let a sum of raw sub-cent amounts disagree with the rounded amounts written next to it (BR-CO-11), which a review caught. Refusing such amounts instead would be a separate decision.
 - `computeTotals` now derives `2.68` where it derived `2.67` for a 2.675 tie. It still accepts a stated `2.67` within its one-cent tolerance.

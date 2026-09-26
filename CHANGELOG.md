@@ -36,6 +36,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - A ship-to with no name (BT-70 is optional) is read, not refused; `shipTo` is typed `DeliveryParty`, whose `name` is optional.
 - `totals.taxTotal` (BT-110) is optional, as in every schema: a summation without it is read, and counts as zero in BR-CO-14 and BR-CO-15.
 - A tax currency equal to the invoice currency is dropped on read, so such a document regenerates instead of failing BR-53.
+- Money amounts are rounded to the cent before anything sums them. Two allowances of `0.005` used to give a BT-107 of `0.01` next to two written amounts of `0.01`, which BR-CO-11 rejects.
 
 ## [0.2.0] - 2026-08-19
 
