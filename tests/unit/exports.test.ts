@@ -8,7 +8,13 @@ import { join } from 'node:path';
 
 const root = join(import.meta.dirname, '..', '..', 'src');
 const index = readFileSync(join(root, 'index.ts'), 'utf8');
-const exportedNames = new Set([...index.matchAll(/\b([A-Z]\w*)\b/g)].map((m) => m[1]));
+// Names inside export statements only: a type merely mentioned in a comment
+// must not count as exported.
+const exportStatements = index
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '')
+  .match(/export[^;]*;/g) ?? [];
+const exportedNames = new Set(exportStatements.flatMap((stmt) => [...stmt.matchAll(/\b([A-Z]\w*)\b/g)].map((m) => m[1])));
 
 function declaredTypes(file: string): string[] {
   const text = readFileSync(file, 'utf8');
