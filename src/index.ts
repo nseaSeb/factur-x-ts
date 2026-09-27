@@ -3,6 +3,9 @@
 
 export type {
   FacturXInvoice,
+  ParsedInvoice,
+  DecimalInput,
+  DeliveryParty,
   CurrencyCode,
   DocumentTypeCode,
   TradeParty,
@@ -58,8 +61,8 @@ export {
 } from './validate/schematron.js';
 export { FacturXProfileNotDetectedError } from './validate/shared.js';
 
-export { parse, extract, FacturXParseError } from './pdf/parser.js';
-export { generate, FacturXGenerateError } from './pdf/generator.js';
+export { parse, extract, FacturXParseError, type FacturXParseErrorCode } from './pdf/parser.js';
+export { generate, FacturXGenerateError, type FacturXGenerateErrorCode } from './pdf/generator.js';
 export { serialize, FacturXSerializeError } from './xml/serializer.js';
 export { deserialize, FacturXDeserializeError } from './xml/deserializer.js';
 export { detectProfile, detectInvoiceNumber } from './xml/guideline.js';

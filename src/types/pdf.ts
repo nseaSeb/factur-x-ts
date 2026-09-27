@@ -3,11 +3,12 @@
 
 import type { FacturXAttachmentName } from '../pdf/filespec.js';
 import type { FacturXMetadata, Profile } from './profiles.js';
-import type { FacturXInvoice } from './invoice.js';
+import type { FacturXInvoice, ParsedInvoice } from './invoice.js';
 import type { ValidationOptions } from './validation.js';
 
 export interface ParseResult {
-  readonly invoice: FacturXInvoice;
+  /** Amounts, quantities and rates as canonical decimal strings. */
+  readonly invoice: ParsedInvoice;
   readonly metadata: FacturXMetadata;
   readonly rawXml: Uint8Array;
 }
