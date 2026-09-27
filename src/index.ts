@@ -66,3 +66,4 @@ export { generate, FacturXGenerateError, type FacturXGenerateErrorCode } from '.
 export { serialize, FacturXSerializeError } from './xml/serializer.js';
 export { deserialize, FacturXDeserializeError } from './xml/deserializer.js';
 export { detectProfile, detectInvoiceNumber } from './xml/guideline.js';
+export type { FacturXAttachmentName } from './pdf/filespec.js';

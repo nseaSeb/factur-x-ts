@@ -6,7 +6,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ### Fixed
 
-- The entry point exports the types 0.3.0 introduced: `ParsedInvoice` (what `parse`, `deserialize` and `computeTotals` return), `DecimalInput`, `DeliveryParty`, `FacturXParseErrorCode` and `FacturXGenerateErrorCode`. A test now fails if a public type is left out again.
+- The entry point exports the types 0.3.0 introduced: `ParsedInvoice` (what `parse`, `deserialize` and `computeTotals` return), `DecimalInput`, `DeliveryParty`, `FacturXParseErrorCode`, `FacturXGenerateErrorCode` and `FacturXAttachmentName` (the type of `extract`'s `filename`). A test now fails if a public type is left out again.
 - `ParseResult.invoice` is typed `ParsedInvoice`. It was still the input type, whose decimals may be numbers, so a caller could not rely on `parse` returning strings, which it always did.
 
 ## [0.3.0] - 2026-09-26
