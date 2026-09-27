@@ -18,7 +18,12 @@ function declaredTypes(file: string): string[] {
   const reexported = [...text.matchAll(/^export type \{([^}]+)\} from/gm)].flatMap((m) =>
     m[1]!.split(',').map((name) => name.trim()).filter(Boolean),
   );
-  return [...declared, ...reexported];
+  // And types pulled in from outside src/types to shape a public type:
+  // ExtractResult.filename is a FacturXAttachmentName from src/pdf/filespec.ts.
+  const importedFromOutside = [...text.matchAll(/^import type \{([^}]+)\} from '\.\.\/(?!types\/)[^']+';/gm)].flatMap((m) =>
+    m[1]!.split(',').map((name) => name.trim()).filter(Boolean),
+  );
+  return [...declared, ...reexported, ...importedFromOutside];
 }
 
 describe('the package entry point', () => {
